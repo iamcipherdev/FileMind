@@ -37,6 +37,7 @@ const api = {
   getAppInfo: () => ipcRenderer.invoke('app:info'),
   openPath: (p: string) => ipcRenderer.invoke('fs:openPath', p),
   startWatcher: () => ipcRenderer.invoke('watcher:start'),
+  notifyUiReady: () => ipcRenderer.invoke('ui:ready'),
 
   onEvent: (cb: (e: AppEvent) => void) => {
     const listener = (_: unknown, e: AppEvent) => cb(e);

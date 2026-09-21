@@ -8,16 +8,20 @@ export default function HomePage({ onNavigate }: { onNavigate: (p: string) => vo
   const [settings, setSettings] = useState<Awaited<ReturnType<typeof api.getSettings>> | null>(null);
   const [ml, setMl] = useState<MlStatus | null>(null);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
-      const [s, info, m, h] = await Promise.all([api.getSettings(), api.getAppInfo(), api.getMlStatus(), api.listHistory()]);
-      setSettings(s);
-      setMl(m);
-      setHistory(h.slice(0, 5));
-      // stats piggyback on history call via app info endpoint; fetch through settings trick is not needed
-      void s;
-      void info;
+      try {
+        const [s, info, m, h] = await Promise.all([api.getSettings(), api.getAppInfo(), api.getMlStatus(), api.listHistory()]);
+        setSettings(s);
+        setMl(m);
+        setHistory(h.slice(0, 5));
+        void info;
+      } catch (e) {
+        // One failing backend call must not blank the page — show it and keep the app usable.
+        setError(e instanceof Error ? e.message : String(e));
+      }
     })();
   }, []);
 
@@ -29,6 +33,12 @@ export default function HomePage({ onNavigate }: { onNavigate: (p: string) => vo
       <p className="mt-1 text-sm text-ink-500">
         Your files, organized locally — nothing ever leaves this computer.
       </p>
+
+      {error && (
+        <div className="card mt-4 border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+          Some information could not be loaded: {error}
+        </div>
+      )}
 
       {/* Quick actions */}
       <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-3">

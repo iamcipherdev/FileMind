@@ -73,6 +73,19 @@ classification and says so honestly.
 > To publish signed installers (Azure Trusted Signing, Certum/SignPath certs),
 > see [docs/SIGNING.md](docs/SIGNING.md) — it's secrets-only, no code changes.
 
+### Troubleshooting
+
+Everything FileMind does at startup is written to
+`%APPDATA%\FileMind\logs\FileMind.log` (rotated, 3 × 1 MB, never any file
+contents). If the app misbehaves, that log plus the in-app warnings are the
+source of truth:
+
+- **Missing/inaccessible folder** — FileMind opens normally and shows a
+  dismissible warning; pick a working folder in Settings. No reinstall needed.
+- **Corrupted database** — the damaged file is kept as
+  `filemind.db.corrupt-<timestamp>` and a fresh one is created; the app opens.
+- **App already running** — launching again focuses the existing window.
+
 ## Local ML — the honest path
 
 FileMind never fakes intelligence. Three models, all trained **from scratch**:

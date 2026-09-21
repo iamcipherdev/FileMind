@@ -1,7 +1,7 @@
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import type { ScannedFile } from '../../shared/types';
-import { isProtectedDir } from './safety';
+import { isProtectedDir, isFileMindRuntimePath } from './safety';
 import { kindForExt } from './categories';
 
 export interface ScanOptions {
@@ -11,6 +11,8 @@ export interface ScanOptions {
   onProgress?: (scanned: number, currentPath: string, estimate: number | null) => void;
   shouldCancel?: () => boolean;
   onFile?: (file: ScannedFile) => void;
+  /** Extra absolute paths to skip entirely (FileMind's own runtime dirs). */
+  protectedRoots?: string[];
 }
 
 export interface ScanSummary {
@@ -40,6 +42,11 @@ export async function scanFolders(roots: string[], opts: ScanOptions = {}): Prom
   let cancelled = false;
 
   for (const root of roots) {
+    // Never scan FileMind's own runtime dirs even if they are the root itself.
+    if (isFileMindRuntimePath(root) || isProtectedDir(root)) {
+      skippedDirs.push(path.resolve(root));
+      continue;
+    }
     const queue: { dir: string; depth: number }[] = [{ dir: path.resolve(root), depth: 0 }];
 
     while (queue.length > 0) {
@@ -67,7 +74,7 @@ export async function scanFolders(roots: string[], opts: ScanOptions = {}): Prom
         }
 
         if (entry.isDirectory()) {
-          if (isProtectedDir(full)) { skippedDirs.push(full); continue; }
+          if (isProtectedDir(full) || isFileMindRuntimePath(full)) { skippedDirs.push(full); continue; }
           if (depth < maxDepth) queue.push({ dir: full, depth: depth + 1 });
           continue;
         }

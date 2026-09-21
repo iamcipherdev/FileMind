@@ -113,10 +113,83 @@ export function openDatabase(dbPath: string): Database {
   const BetterSqlite3 = req('better-sqlite3');
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   const db = new BetterSqlite3(dbPath) as Database;
+  db.pragma('busy_timeout = 5000');   // wait instead of instant SQLITE_BUSY (AV scans, a previous instance still exiting)
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
   migrate(db);
   return db;
+}
+
+export interface ResilientOpenResult {
+  db: Database;
+  /** true when the previous database file was unreadable and got quarantined */
+  recovered: boolean;
+  quarantinedTo?: string;
+}
+
+const sleepSync = (ms: number) => {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+};
+
+/**
+ * Open the database, surviving the two real-world failure modes:
+ *  1. TRANSIENT LOCK — antivirus/indexer holds the file right after the
+ *     previous session exited, or a still-exiting instance keeps the lock.
+ *     → retry with backoff; every connection runs with busy_timeout = 5s.
+ *  2. CORRUPTED FILE — power loss / killed process / disk fault.
+ *     → quarantine the damaged files (never delete: the user may want to
+ *       inspect them) and create a fresh database. The app still starts.
+ */
+export function openDatabaseResilient(
+  dbPath: string,
+  onRetry?: (message: string) => void
+): ResilientOpenResult {
+  const req = eval('require') as NodeRequire;
+  const BetterSqlite3 = req('better-sqlite3');
+  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+
+  const tryOpen = (): Database => {
+    const db = new BetterSqlite3(dbPath) as Database;
+    try {
+      db.pragma('busy_timeout = 5000');
+      db.pragma('journal_mode = WAL');
+      db.pragma('foreign_keys = ON');
+      migrate(db);
+      return db;
+    } catch (err) {
+      try { db.close(); } catch { /* ignore */ }
+      throw err;
+    }
+  };
+
+  let lastErr: unknown = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      return { db: tryOpen(), recovered: false };
+    } catch (err) {
+      lastErr = err;
+      onRetry?.(`database open attempt ${attempt} failed: ${(err as Error).message}`);
+      if (attempt < 3) sleepSync(400 * attempt);
+    }
+  }
+
+  // All retries failed — quarantine the damaged database and start fresh.
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  let quarantinedTo: string | undefined;
+  for (const suffix of ['', '-wal', '-shm']) {
+    const src = `${dbPath}${suffix}`;
+    if (fs.existsSync(src)) {
+      const dest = `${dbPath}.corrupt-${stamp}${suffix}`;
+      try {
+        fs.renameSync(src, dest);
+        quarantinedTo = quarantinedTo ?? dest;
+      } catch {
+        onRetry?.(`could not quarantine ${src}: ${(lastErr as Error)?.message ?? 'unknown'}`);
+      }
+    }
+  }
+  onRetry?.(`database was unreadable (${(lastErr as Error)?.message ?? 'unknown'}) — quarantined and recreated`);
+  return { db: tryOpen(), recovered: true, quarantinedTo };
 }
 
 export function migrate(db: Database): void {

@@ -8,29 +8,48 @@ export default function SettingsPage({ onOnboard }: { onOnboard: () => void }) {
   const [ml, setMl] = useState<MlStatus | null>(null);
   const [info, setInfo] = useState<Awaited<ReturnType<typeof api.getAppInfo>> | null>(null);
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
-      setSettings(await api.getSettings());
-      setMl(await api.getMlStatus());
-      setInfo(await api.getAppInfo());
+      try {
+        setSettings(await api.getSettings());
+        setMl(await api.getMlStatus());
+        setInfo(await api.getAppInfo());
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
     })();
   }, []);
 
-  if (!settings) return <div className="p-8 text-sm text-ink-400">Loading…</div>;
+  if (!settings) return <div className="p-8 text-sm text-ink-400">Loading…{error ? ` (${error})` : ''}</div>;
 
   const update = (patch: Partial<FileMindSettings>) => setSettings({ ...settings, ...patch });
 
   const save = async () => {
-    await api.setSettings(settings);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 1500);
+    try {
+      const res = await api.setSettings(settings);
+      if (res?.rejected?.length) {
+        setError(`These folders were not accepted: ${res.rejected.join(', ')}`);
+      } else {
+        setError(null);
+        setSaved(true);
+        setTimeout(() => setSaved(false), 1500);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
   };
 
   const addFolder = async (key: 'organizeFolders' | 'watchedFolders') => {
-    const f = await api.pickFolder(key === 'organizeFolders' ? 'Pick a folder FileMind may organize' : 'Pick a folder to watch for changes');
-    if (!f) return;
-    update({ [key]: [...settings[key], f] } as Partial<FileMindSettings>);
+    try {
+      const f = await api.pickFolder(key === 'organizeFolders' ? 'Pick a folder FileMind may organize' : 'Pick a folder to watch for changes');
+      if (!f) return;
+      update({ [key]: [...settings[key], f] } as Partial<FileMindSettings>);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
   };
 
   return (
@@ -118,6 +137,10 @@ export default function SettingsPage({ onOnboard }: { onOnboard: () => void }) {
         <button className="btn-mint" onClick={save}>Save settings</button>
         {saved && <span className="text-sm text-mint-700">Saved ✓</span>}
         <button className="btn-ghost" onClick={onOnboard}>Re-run onboarding</button>
+      </div>
+      {error && <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">{error}</div>}
+      <div className="mt-6 text-[11px] leading-relaxed text-ink-400">
+        Diagnostics log: <span className="font-mono break-all">{info?.logFilePath || 'unavailable'}</span>
       </div>
     </div>
   );

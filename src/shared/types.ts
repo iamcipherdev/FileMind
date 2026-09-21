@@ -163,6 +163,26 @@ export interface FileMindSettings {
   autoApplyHigh: boolean;       // default false — always confirm (safety)
   contentExtractEnabled: boolean;
   maxContentBytes: number;      // default 2MB
+  /**
+   * Transient, never persisted: populated by the main process on read to
+   * report saved folders that are currently missing/unreadable/protected.
+   */
+  folderIssues?: FolderIssue[];
+}
+
+/** A saved folder that is missing/unreadable/protected — reported, never fatal. */
+export interface FolderIssue {
+  path: string;
+  role: 'organize' | 'watch';
+  issue: 'missing' | 'inaccessible' | 'not-a-folder' | 'protected' | 'error';
+}
+
+export interface AppInfo {
+  version: string;
+  platform: string;
+  dataDir: string;
+  logFilePath: string;
+  dbRecoveredFromCorruption: boolean;
 }
 
 export interface MlStatus {
@@ -205,11 +225,12 @@ export interface FilemindApi {
 
   // settings / system
   getSettings: () => Promise<FileMindSettings>;
-  setSettings: (s: FileMindSettings) => Promise<void>;
+  setSettings: (s: FileMindSettings) => Promise<{ rejected?: string[] }>;
   pickFolder: (title: string) => Promise<string | null>;
   getMlStatus: () => Promise<MlStatus>;
   generateDemoFiles: (dir: string) => Promise<{ created: number; dir: string }>;
-  getAppInfo: () => Promise<{ version: string; platform: string; dataDir: string }>;
+  getAppInfo: () => Promise<AppInfo>;
+  notifyUiReady: () => Promise<void>;
 
   // events
   onEvent: (cb: (e: AppEvent) => void) => () => void;

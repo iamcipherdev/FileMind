@@ -17,23 +17,89 @@ const DEFAULT_SETTINGS: FileMindSettings = {
   maxContentBytes: 2 * 1024 * 1024,
 };
 
+/**
+ * Best-effort salvage of a corrupted folder-list row. Accepts a bare
+ * Windows/Unix path string, or a JSON-ish fragment containing quoted paths.
+ * Returns null when nothing recoverable is found.
+ */
+export function salvageFolderList(raw: string): string[] | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const looksLikePath = (p: string) => /^([a-zA-Z]:[\\/]|\/)/.test(p) && !p.includes('\u0000');
+  if (looksLikePath(trimmed)) return [trimmed];
+  const matches = raw.match(/"[^"]+"|'[^']+'/g);
+  if (matches && matches.length > 0) {
+    const paths = matches
+      .map((m) => m.slice(1, -1))
+      .map((p) => p.replace(/\\(?:\\|\/)/g, (m0) => (m0 === '\\\\' ? '\\' : '/'))) // unescape JSON string escapes
+      .filter((p) => p.length > 2 && looksLikePath(p));
+    if (paths.length > 0) return paths;
+  }
+  return null;
+}
+
 export class Repository {
   constructor(private db: Database) {}
 
   // ---------- settings ----------
+  /**
+   * Fault-tolerant settings reader. A corrupted or maliciously malformed row
+   * must NEVER take the app down: each key is parsed independently, invalid
+   * values fall back to defaults (or are salvaged when partially valid).
+   */
   getSettings(): FileMindSettings {
     const rows = this.db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
     const map = Object.fromEntries(rows.map((r) => [r.key, r.value]));
+
+    const json = (key: string, fallback: unknown): unknown => {
+      const raw = map[key];
+      if (raw === undefined || raw === null) return fallback;
+      try {
+        const parsed = JSON.parse(raw);
+        if (parsed === null || parsed === undefined) return fallback;
+        return parsed;
+      } catch {
+        // Salvage: the row may be a bare string (legacy/manual edit) or truncated.
+        const salvaged = salvageFolderList(raw);
+        return salvaged ?? fallback;
+      }
+    };
+    const num = (key: string, fallback: number, min: number, max: number): number => {
+      const n = Number(map[key]);
+      if (!Number.isFinite(n)) return fallback;
+      return Math.min(max, Math.max(min, n));
+    };
+    const bool = (key: string, fallback: boolean): boolean => {
+      const v = map[key];
+      if (v === undefined) return fallback;
+      if (v === 'true' || v === '1') return true;
+      if (v === 'false' || v === '0') return false;
+      return fallback;
+    };
+
+    const strArray = (key: string): string[] => {
+      const v = json(key, []);
+      if (Array.isArray(v)) return v.filter((x): x is string => typeof x === 'string' && x.trim().length > 0);
+      // A bare string where an array belongs: keep it only if it looks like a path.
+      if (typeof v === 'string' && /^([a-zA-Z]:[\\/]|\/)/.test(v.trim())) return [v.trim()];
+      return [];
+    };
+
     return {
-      ...DEFAULT_SETTINGS,
-      ...map.watchedFolders && { watchedFolders: JSON.parse(map.watchedFolders) },
-      ...map.organizeFolders && { organizeFolders: JSON.parse(map.organizeFolders) },
-      ...map.excludedNames && { excludedNames: JSON.parse(map.excludedNames) },
-      ...map.highThreshold && { highThreshold: Number(map.highThreshold) },
-      ...map.reviewThreshold && { reviewThreshold: Number(map.reviewThreshold) },
-      ...map.autoApplyHigh && { autoApplyHigh: map.autoApplyHigh === 'true' },
-      ...map.contentExtractEnabled && { contentExtractEnabled: map.contentExtractEnabled === 'true' },
-      ...map.maxContentBytes && { maxContentBytes: Number(map.maxContentBytes) },
+      watchedFolders: strArray('watchedFolders'),
+      organizeFolders: strArray('organizeFolders'),
+      excludedNames: (() => {
+        const v = strArray('excludedNames');
+        return v.length > 0 ? v : DEFAULT_SETTINGS.excludedNames;
+      })(),
+      highThreshold: num('highThreshold', DEFAULT_SETTINGS.highThreshold, 0.5, 1),
+      reviewThreshold: num('reviewThreshold', DEFAULT_SETTINGS.reviewThreshold, 0.3, 0.95),
+      autoApplyHigh: bool('autoApplyHigh', DEFAULT_SETTINGS.autoApplyHigh),
+      contentExtractEnabled: bool('contentExtractEnabled', DEFAULT_SETTINGS.contentExtractEnabled),
+      maxContentBytes: (() => {
+        const n = num('maxContentBytes', DEFAULT_SETTINGS.maxContentBytes, 1024, 64 * 1024 * 1024);
+        return Math.round(n);
+      })(),
     };
   }
 

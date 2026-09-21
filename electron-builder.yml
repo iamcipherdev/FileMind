@@ -16,6 +16,12 @@ extraResources:
       - "vocab.json"
       - "manifest.json"
 asar: true
+# onnxruntime-node's binding lives in app.asar.unpacked; its DLLs must be next
+# to it on the real filesystem or Windows cannot load them (DLL search cannot
+# look inside an asar archive). Without this the local ML model silently
+# degrades to rules on Windows.
+asarUnpack:
+  - "node_modules/onnxruntime-node/**"
 win:
   target:
     - target: nsis

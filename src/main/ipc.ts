@@ -1,8 +1,7 @@
 import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
 import path from 'node:path';
-import fsSync from 'node:fs';
 import { Repository } from './db/repository';
-import { openDatabase, Database } from './db/database';
+import { openDatabaseResilient, Database } from './db/database';
 import { TransactionEngine } from './services/transaction';
 import { runSuggestPipeline } from './services/suggestEngine';
 import { planForFile } from './services/planner';
@@ -14,28 +13,54 @@ import { extractText } from './services/textExtract';
 import { classifyDeterministic } from './services/deterministic';
 import { generateDemoFiles } from './services/demoFiles';
 import { FolderWatcher } from './services/watcher';
+import { auditFolders, sanitizeSettingsFolders } from './services/folderGuard';
+import { logger } from './logger';
 import crypto from 'node:crypto';
+import type { FileMindSettings } from '../shared/types';
 
 let db: Database | null = null;
+let dbRecoveredFromCorruption = false;
 let repo: Repository | null = null;
 let ml: MlClassifier | null = null;
 let engine: TransactionEngine | null = null;
 let watcher: FolderWatcher | null = null;
-let mainWindow: BrowserWindow | null = null;
 let scanCancelFlag = false;
+let scanRunning = false;
 
 export function wireIpc(getWin: () => BrowserWindow | null): void {
-  mainWindow = getWin();
+  // Store the ACCESSOR, not a snapshot: the window is created after wiring,
+  // so a captured value would be null forever (the bug behind dead push
+  // events and non-modal dialogs in v0.1.x).
+  const mainWindow = () => getWin();
 
   const send = (type: string, payload: unknown) => {
-    mainWindow?.webContents.send('filemind:event', { type, payload });
+    const w = mainWindow();
+    if (w && !w.isDestroyed()) {
+      try { w.webContents.send('filemind:event', { type, payload }); }
+      catch (err) { logger.warn('ipc', `send(${type}) failed`, { message: (err as Error).message }); }
+    }
   };
 
+  /**
+   * DB lifecycle. Opened lazily on first use, resilient against:
+   *  - transient locks (antivirus, a previous instance still exiting): retry + 5s busy_timeout
+   *  - a corrupted database file: quarantine to *.corrupt-<ts> and recreate,
+   *    so the user NEVER has to reinstall FileMind over a bad db.
+   */
   const ensure = () => {
     if (!db) {
-      db = openDatabase(path.join(app.getPath('userData'), 'filemind.db'));
+      const dbPath = path.join(app.getPath('userData'), 'filemind.db');
+      const res = openDatabaseResilient(dbPath, (msg: string) => logger.warn('db', msg));
+      db = res.db;
+      dbRecoveredFromCorruption = res.recovered;
+      if (res.recovered) {
+        logger.error('db', 'previous database was unreadable and has been quarantined; a fresh one was created', {
+          quarantinedTo: res.quarantinedTo ?? null,
+        });
+      }
       repo = new Repository(db);
       repo.ensureCategories();
+      logger.info('db', 'database ready', { path: dbPath, recovered: res.recovered });
     }
     return repo!;
   };
@@ -45,43 +70,73 @@ export function wireIpc(getWin: () => BrowserWindow | null): void {
     return Promise.resolve(fn(r));
   };
 
-  // ---- scanning / analysis ----
-  ipcMain.handle('scan:start', async (_e, roots: string[]) => {
-    const r = ensure();
-    scanCancelFlag = false;
-    const settings = r.getSettings();
-    if (!ml) ml = await createMlClassifier();
-    const result = await runSuggestPipeline(roots, {
-      getRules: async () => r.listRules(),
-      ml,
-      settings: {
-        organizeRoots: settings.organizeFolders.length ? settings.organizeFolders : roots,
-        excludedNames: settings.excludedNames,
-        highThreshold: settings.highThreshold,
-        reviewThreshold: settings.reviewThreshold,
-        contentExtractEnabled: settings.contentExtractEnabled,
-        maxContentBytes: settings.maxContentBytes,
-      },
-    }, {
-      shouldCancel: () => scanCancelFlag,
-      onProgress: (p) => send('scan-progress', p),
+  /** Wrap every handler: one bad call must never crash the process or stay silent. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const safeHandle = (channel: string, fn: (...args: any[]) => unknown): void => {
+    ipcMain.handle(channel, async (...args: unknown[]) => {
+      try {
+        return await fn(...args);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        logger.error('ipc', `handler failed: ${channel}`, { message });
+        throw new Error(message); // surfaced to the invoking renderer call
+      }
     });
+  };
 
-    const batchId = result.suggestions[0]?.batchId ?? `batch-${Date.now().toString(36)}`;
-    r.saveSuggestions(batchId, result.suggestions);
-    send('scan-done', { scanned: result.scanned, suggestions: result.suggestions.length, cancelled: result.cancelled, batchId });
-    return { batchId };
+  // ---- scanning / analysis ----
+  safeHandle('scan:start', async (_e: unknown, roots: string[]) => {
+    const r = ensure();
+    if (scanRunning) {
+      logger.warn('scan', 'scan:start ignored — a scan is already running');
+      throw new Error('A scan is already running. Wait for it to finish or press Cancel.');
+    }
+    if (!Array.isArray(roots) || roots.length === 0 || !roots.every((x) => typeof x === 'string')) {
+      throw new Error('scan:start needs a non-empty list of folders.');
+    }
+    scanRunning = true;
+    scanCancelFlag = false;
+    try {
+      const settings = r.getSettings();
+      if (!ml) ml = await createMlClassifier();
+      const result = await runSuggestPipeline(roots, {
+        getRules: async () => r.listRules(),
+        ml,
+        settings: {
+          organizeRoots: settings.organizeFolders.length ? settings.organizeFolders : roots,
+          excludedNames: settings.excludedNames,
+          highThreshold: settings.highThreshold,
+          reviewThreshold: settings.reviewThreshold,
+          contentExtractEnabled: settings.contentExtractEnabled,
+          maxContentBytes: settings.maxContentBytes,
+        },
+      }, {
+        shouldCancel: () => scanCancelFlag,
+        onProgress: (p) => send('scan-progress', p),
+      });
+
+      const batchId = result.suggestions[0]?.batchId ?? `batch-${Date.now().toString(36)}`;
+      r.saveSuggestions(batchId, result.suggestions);
+      logger.info('scan', 'scan finished', {
+        scanned: result.scanned, suggestions: result.suggestions.length,
+        errors: result.errors.length, cancelled: result.cancelled,
+      });
+      send('scan-done', { scanned: result.scanned, suggestions: result.suggestions.length, cancelled: result.cancelled, batchId });
+      return { batchId };
+    } finally {
+      scanRunning = false;
+    }
   });
 
-  ipcMain.handle('scan:cancel', async () => { scanCancelFlag = true; });
+  safeHandle('scan:cancel', async () => { scanCancelFlag = true; logger.info('scan', 'cancel requested'); });
 
-  ipcMain.handle('suggestions:list', (_e, batchId?: string) => withRepo((r) => r.getSuggestions(batchId)));
-  ipcMain.handle('suggestions:decide', (_e, ids: string[], decision: 'approved' | 'rejected') =>
+  safeHandle('suggestions:list', (_e: unknown, batchId?: string) => withRepo((r) => r.getSuggestions(batchId)));
+  safeHandle('suggestions:decide', (_e: unknown, ids: string[], decision: 'approved' | 'rejected') =>
     withRepo((r) => r.decideSuggestions(ids, decision)));
-  ipcMain.handle('suggestions:classify', (_e, p: string) => Promise.resolve(classifyDeterministic({ name: path.basename(p), ext: path.extname(p), isSymlink: false })));
+  safeHandle('suggestions:classify', (_e: unknown, p: string) => Promise.resolve(classifyDeterministic({ name: path.basename(p), ext: path.extname(p), isSymlink: false })));
 
   // ---- apply / undo / history ----
-  ipcMain.handle('suggestions:apply', async (_e, ids: string[]) => {
+  safeHandle('suggestions:apply', async (_e: unknown, ids: string[]) => {
     const r = ensure();
     if (!engine) engine = new TransactionEngine(r);
     const suggestions = r.getSuggestionsByIds(ids);
@@ -89,31 +144,33 @@ export function wireIpc(getWin: () => BrowserWindow | null): void {
     const roots = settings.organizeFolders.length ? settings.organizeFolders : suggestions.map((s) => path.parse(s.fromPath).root);
     const result = await engine.apply(suggestions, roots);
     r.markSuggestionsStatus(ids.filter((id) => !result.failed.some((f) => f.path === suggestions.find((s) => s.id === id)?.filePath)), 'applied');
+    logger.info('apply', 'batch applied', { applied: result.applied, failed: result.failed.length });
     send('apply-done', result);
     return result;
   });
 
-  ipcMain.handle('undo:batch', async (_e, batchId: string) => {
+  safeHandle('undo:batch', async (_e: unknown, batchId: string) => {
     const r = ensure();
     if (!engine) engine = new TransactionEngine(r);
     const result = await engine.undo(batchId);
+    logger.info('undo', 'batch undone', { batchId, undone: result.undone, failed: result.failed.length });
     send('undo-done', result);
     return result;
   });
 
-  ipcMain.handle('history:list', () => withRepo((r) => r.listHistory()));
-  ipcMain.handle('history:batch', (_e, batchId: string) => withRepo((r) => r.getBatchEntries(batchId)));
+  safeHandle('history:list', () => withRepo((r) => r.listHistory()));
+  safeHandle('history:batch', (_e: unknown, batchId: string) => withRepo((r) => r.getBatchEntries(batchId)));
 
   // ---- rules ----
-  ipcMain.handle('rules:list', () => withRepo((r) => r.listRules()));
-  ipcMain.handle('rules:save', (_e, rule: import('../shared/types').Rule) => withRepo((r) => {
+  safeHandle('rules:list', () => withRepo((r) => r.listRules()));
+  safeHandle('rules:save', (_e: unknown, rule: import('../shared/types').Rule) => withRepo((r) => {
     const errors = validateRule(rule);
     if (errors.length > 0) throw new Error(errors.join(' '));
     r.saveRule(rule);
   }));
-  ipcMain.handle('rules:delete', (_e, id: string) => withRepo((r) => r.deleteRule(id)));
-  ipcMain.handle('rules:parse', (_e, text: string) => Promise.resolve(parseRulePhrase(text)));
-  ipcMain.handle('rules:test', async (_e, rule: import('../shared/types').Rule, folder: string) => {
+  safeHandle('rules:delete', (_e: unknown, id: string) => withRepo((r) => r.deleteRule(id)));
+  safeHandle('rules:parse', (_e: unknown, text: string) => Promise.resolve(parseRulePhrase(text)));
+  safeHandle('rules:test', async (_e: unknown, rule: import('../shared/types').Rule, folder: string) => {
     const r = ensure();
     const settings = r.getSettings();
     const walk = await import('./services/scanner');
@@ -139,7 +196,7 @@ export function wireIpc(getWin: () => BrowserWindow | null): void {
   });
 
   // ---- duplicates ----
-  ipcMain.handle('duplicates:find', async (_e, roots: string[]) => {
+  safeHandle('duplicates:find', async (_e: unknown, roots: string[]) => {
     const r = ensure();
     const settings = r.getSettings();
     const walk = await import('./services/scanner');
@@ -147,7 +204,7 @@ export function wireIpc(getWin: () => BrowserWindow | null): void {
     return findDuplicates(scan.files.map((f) => ({ path: f.path, name: f.name, sizeBytes: f.sizeBytes, mtimeMs: f.mtimeMs })));
   });
 
-  ipcMain.handle('duplicates:move', async (_e, paths: string[], root: string) => {
+  safeHandle('duplicates:move', async (_e: unknown, paths: string[], root: string) => {
     const r = ensure();
     if (!engine) engine = new TransactionEngine(r);
     const qdir = quarantineDirFor(root);
@@ -170,36 +227,94 @@ export function wireIpc(getWin: () => BrowserWindow | null): void {
   });
 
   // ---- settings / system ----
-  ipcMain.handle('settings:get', () => withRepo((r) => r.getSettings()));
-  ipcMain.handle('settings:set', (_e, s) => withRepo((r) => { r.setSettings(s); watcher?.update(s.watchedFolders); }));
-  ipcMain.handle('dialog:pickFolder', async (_e, title: string) => {
-    const out = await dialog.showOpenDialog(mainWindow!, { title, properties: ['openDirectory'] });
+  safeHandle('settings:get', () => withRepo((r) => {
+    const s = r.getSettings();
+    return { ...s, folderIssues: auditFolders(s) };
+  }));
+
+  safeHandle('settings:set', (_e: unknown, s: FileMindSettings) => withRepo((r) => {
+    const { rejected } = sanitizeSettingsFolders(s);
+    r.setSettings(s);
+    logger.info('settings', 'settings saved', {
+      organizeFolders: s.organizeFolders,
+      watchedFolders: s.watchedFolders,
+      rejectedFolders: rejected,
+    });
+    watcher?.update(s.watchedFolders);
+    return { rejected };
+  }));
+
+  safeHandle('dialog:pickFolder', async (_e: unknown, title: string) => {
+    const parent = mainWindow();
+    const opts: Electron.OpenDialogOptions = { title: typeof title === 'string' ? title.slice(0, 120) : 'Pick a folder', properties: ['openDirectory'] };
+    const out = parent && !parent.isDestroyed()
+      ? await dialog.showOpenDialog(parent, opts)   // modal, correctly parented
+      : await dialog.showOpenDialog(opts);          // window already gone — still functional
     return out.canceled ? null : out.filePaths[0];
   });
-  ipcMain.handle('ml:status', async () => {
+
+  safeHandle('ml:status', async () => {
     if (!ml) ml = await createMlClassifier();
     return ml.status();
   });
-  ipcMain.handle('app:info', () => withRepo(() => ({
+
+  safeHandle('app:info', () => withRepo(() => ({
     version: app.getVersion(),
     platform: process.platform,
     dataDir: app.getPath('userData'),
+    logFilePath: logger.getLogFilePath(),
+    dbRecoveredFromCorruption,
   })));
-  ipcMain.handle('demo:generate', (_e, dir: string) => Promise.resolve(generateDemoFiles(dir)));
-  ipcMain.handle('fs:openPath', (_e, p: string) => { shell.openPath(p); });
-  ipcMain.handle('extract:preview', (_e, p: string) => withRepo(async (r) => {
+
+  safeHandle('demo:generate', (_e: unknown, dir: string) => Promise.resolve(generateDemoFiles(dir)));
+  safeHandle('fs:openPath', (_e: unknown, p: string) => { shell.openPath(p); });
+  safeHandle('extract:preview', (_e: unknown, p: string) => withRepo(async (r) => {
     const s = r.getSettings();
     const out = await extractText(p, { enabled: true, maxBytes: s.maxContentBytes });
     return out ?? { text: '', truncated: false };
   }));
 
   // ---- watcher ----
-  watcher = new FolderWatcher((p) => send('fs-change', p));
-  ipcMain.handle('watcher:start', () => withRepo((r) => { watcher!.update(r.getSettings().watchedFolders); }));
+  // Created here but only STARTED once the UI is up (ui-ready below) or when
+  // the user saves settings — never before the window exists.
+  watcher = new FolderWatcher(
+    (p) => send('fs-change', p),
+    (msg, extra) => logger.warn('watcher', msg, extra),
+    (msg, extra) => logger.info('watcher', msg, extra)
+  );
+  safeHandle('watcher:start', () => withRepo((r) => {
+    watcher!.update(r.getSettings().watchedFolders);
+  }));
+  safeHandle('ui:ready', () => {
+    logger.info('main', 'UI ready — starting background services');
+    withRepo((r) => { watcher!.update(r.getSettings().watchedFolders); });
+  });
+}
+
+/** Called once the renderer has painted — watchers must not run before the UI is safe. */
+export function startServicesAfterUiReady(): void {
+  try {
+    if (watcher && repo) watcher.update(repo.getSettings().watchedFolders);
+  } catch (err) {
+    logger.warn('watcher', 'deferred start failed', { message: (err as Error).message });
+  }
+}
+
+/** Bounded, best-effort shutdown for before-quit (scan, watcher, db). */
+export function shutdownServices(): void {
+  scanCancelFlag = true;
+  try { watcher?.stop(); } catch (err) { logger.warn('watcher', 'stop failed on quit', { message: (err as Error).message }); }
+  watcher = null;
+  try { repo?.close(); logger.info('db', 'database closed cleanly'); } catch (err) {
+    logger.warn('db', 'close failed on quit', { message: (err as Error).message });
+  }
+  db = null;
+  repo = null;
+  logger.flush();
 }
 
 export function ensureDbForTests(): { repo: Repository; db: Database } {
-  const d = openDatabase(':memory:');
+  const d = openDatabaseResilient(':memory:').db;
   const r = new Repository(d);
   r.ensureCategories();
   return { repo: r, db: d };
@@ -207,12 +322,4 @@ export function ensureDbForTests(): { repo: Repository; db: Database } {
 
 export function newBatchId(): string {
   return crypto.randomUUID();
-}
-
-export function hasMainWindow(): boolean {
-  return mainWindow !== null && !mainWindow.isDestroyed();
-}
-
-export function appDataDirName(): string {
-  return fsSync === null ? '' : 'filemind';
 }

@@ -31,12 +31,13 @@ function mockApi(): FilemindApi {
       highThreshold: 0.9, reviewThreshold: 0.7, autoApplyHigh: false,
       contentExtractEnabled: true, maxContentBytes: 2 * 1024 * 1024,
     }),
-    setSettings: noop,
+    setSettings: async () => ({ rejected: [] }),
     pickFolder: async () => null,
     getMlStatus: async () => ({ runtimeAvailable: false, modelInstalled: false, modelPath: null, message: 'Local ML model not installed. Rule-based organization is active.' }),
     generateDemoFiles: async () => ({ created: 0, dir: '' }),
-    getAppInfo: async () => ({ version: '0.1.0', platform: 'browser', dataDir: '' }),
+    getAppInfo: async () => ({ version: '0.1.0', platform: 'browser', dataDir: '', logFilePath: '', dbRecoveredFromCorruption: false }),
     onEvent: () => () => undefined,
+    notifyUiReady: async () => undefined,
   };
 }
 

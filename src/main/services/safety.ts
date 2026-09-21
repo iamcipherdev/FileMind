@@ -106,6 +106,36 @@ export function isProtectedDir(dirPath: string): boolean {
   return segs.some((s) => PROTECTED_DIR_NAMES.has(s));
 }
 
+/**
+ * Paths FileMind must never organize or watch, even if the user selects a
+ * parent folder that contains them: its own config/db/log directory, its
+ * installation directory and the system temp dir. Overridable via env in
+ * tests (FILEMIND_TEST_RUNTIME_PATHS).
+ */
+export function isFileMindRuntimePath(p: string): boolean {
+  const candidates: string[] = [];
+
+  // Set explicitly by the main process at startup (see main runtime paths).
+  for (const key of ['FILEMIND_USERDATA_DIR', 'FILEMIND_INSTALL_DIR', 'FILEMIND_TEMP_DIR']) {
+    const v = process.env[key];
+    if (v) candidates.push(v);
+  }
+  // Test hook: extra paths without a real Electron environment.
+  const extra = process.env.FILEMIND_TEST_RUNTIME_PATHS;
+  if (extra) candidates.push(...extra.split(path.delimiter).filter(Boolean));
+
+  if (candidates.length === 0) return false;
+  const norm = (x: string) => {
+    const r = path.resolve(x);
+    return process.platform === 'win32' ? r.toLowerCase() : r;
+  };
+  const target = norm(p);
+  return candidates.some((c) => {
+    const base = norm(c);
+    return target === base || target.startsWith(base + path.sep);
+  });
+}
+
 /** Extensions FileMind will never propose to move by default ( executables & scripts ). */
 export const CAUTIOUS_EXTENSIONS = new Set([
   '.exe', '.msi', '.bat', '.cmd', '.ps1', '.js', '.mjs', '.cjs', '.vbs', '.scr', '.com', '.jar', '.apk', '.dll',

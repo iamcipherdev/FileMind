@@ -8,24 +8,43 @@ export default function OnboardingPage({ onDone }: { onDone: () => void }) {
   const [step, setStep] = useState(0);
   const [folders, setFolders] = useState<string[]>([]);
   const [demoCreated, setDemoCreated] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const addFolder = async () => {
-    const f = await api.pickFolder('Pick a folder FileMind may organize');
-    if (f && !folders.includes(f)) setFolders([...folders, f]);
+    try {
+      const f = await api.pickFolder('Pick a folder FileMind may organize');
+      if (f && !folders.includes(f)) setFolders([...folders, f]);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
   };
 
   const makeDemo = async () => {
-    const dir = await api.pickFolder('Pick where the FileMindDemo folder should be created');
-    if (!dir) return;
-    const out = await api.generateDemoFiles(dir + '/FileMindDemo');
-    setDemoCreated(out.dir);
-    setFolders([...folders, out.dir]);
+    try {
+      const dir = await api.pickFolder('Pick where the FileMindDemo folder should be created');
+      if (!dir) return;
+      const out = await api.generateDemoFiles(dir + '/FileMindDemo');
+      setDemoCreated(out.dir);
+      setFolders([...folders, out.dir]);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
   };
 
   const finish = async () => {
-    const s = await api.getSettings();
-    await api.setSettings({ ...s, organizeFolders: folders, watchedFolders: folders });
-    onDone();
+    try {
+      const s = await api.getSettings();
+      const res = await api.setSettings({ ...s, organizeFolders: folders, watchedFolders: folders });
+      if (res?.rejected?.length) {
+        setError(`These folders were not accepted: ${res.rejected.join(', ')}`);
+        return;
+      }
+      onDone();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
   };
 
   return (
@@ -43,6 +62,7 @@ export default function OnboardingPage({ onDone }: { onDone: () => void }) {
             <p className="mt-2 text-sm text-ink-500">
               FileMind only ever moves files inside the folders you pick here. That is a hard boundary — not a suggestion.
             </p>
+            {error && <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">{error}</div>}
             <button className="btn-mint mt-4" onClick={addFolder}><FolderPlus size={14} /> Add a folder</button>
             <button className="btn-ghost mt-4" onClick={makeDemo}>…or generate a safe demo folder</button>
             {demoCreated && <div className="mt-2 text-xs text-mint-700">Demo corpus ready: {demoCreated}</div>}
@@ -83,7 +103,7 @@ export default function OnboardingPage({ onDone }: { onDone: () => void }) {
           {step < STEPS - 1 ? (
             <button className="btn-primary" onClick={() => setStep(step + 1)}>Next <ArrowRight size={14} /></button>
           ) : (
-            <button className="btn-mint" onClick={finish} disabled={folders.length === 0}>Start organizing</button>
+            <button className="btn-mint" onClick={finish} disabled={folders.length === 0 || !!error?.startsWith('These folders')}>Start organizing</button>
           )}
         </div>
       </div>

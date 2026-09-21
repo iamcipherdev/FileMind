@@ -17,15 +17,20 @@ export default function OrganizePage() {
   const [preview, setPreview] = useState<{ path: string; text: string; truncated: boolean } | null>(null);
   const [result, setResult] = useState<ApplyResult | null>(null);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
-      const s = await api.getSettings();
-      setSettings(s);
-      setSelectedRoot(s.organizeFolders[0] ?? '');
-      const pending = await api.getSuggestions();
-      setSuggestions(pending);
-      setApproved(new Set(pending.filter((p) => p.tier === 'high' && p.status === 'approved').map((p) => p.id)));
+      try {
+        const s = await api.getSettings();
+        setSettings(s);
+        setSelectedRoot(s.organizeFolders[0] ?? '');
+        const pending = await api.getSuggestions();
+        setSuggestions(pending);
+        setApproved(new Set(pending.filter((p) => p.tier === 'high' && p.status === 'approved').map((p) => p.id)));
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
     })();
   }, []);
 
@@ -58,7 +63,14 @@ export default function OrganizePage() {
     setResult(null);
     setSuggestions([]);
     setProgress({ scanned: 0, totalEstimate: null, currentPath: '', done: false });
-    await api.startScan([selectedRoot]);
+    try {
+      await api.startScan([selectedRoot]);
+    } catch (e) {
+      // Backend refused the scan (e.g. one already running) — surface it, stay usable.
+      setScanning(false);
+      setProgress(null);
+      setError(e instanceof Error ? e.message : String(e));
+    }
   };
 
   const toggle = (id: string) => {
@@ -122,6 +134,14 @@ export default function OrganizePage() {
       </div>
 
       {/* progress */}
+      {error && (
+        <div className="card mt-4 flex items-start gap-3 border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+          <ShieldAlert size={16} className="mt-0.5 shrink-0" />
+          <div className="flex-1">{error}</div>
+          <button className="text-xs text-amber-700 hover:underline" onClick={() => setError(null)}>dismiss</button>
+        </div>
+      )}
+
       {scanning && progress && (
         <div className="card mt-4 flex items-center gap-3 p-4 text-sm">
           <Loader2 className="animate-spin text-mint-600" size={16} />

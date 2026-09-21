@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { Classification, MlStatus } from '../../shared/types';
 import { normalizeConfidence } from './confidence';
+import { logger } from '../logger';
 
 /**
  * Local ML classifier (ONNX Runtime).
@@ -96,7 +97,23 @@ export async function createMlClassifier(modelDir?: string): Promise<MlClassifie
     };
   }
 
-  const session = await (ort!.InferenceSession as { create: (p: string) => Promise<OnnxSessionLike> }).create(modelPath);
+  // Session creation touches native code (onnxruntime). Any failure here must
+  // degrade to the rule engine — it must never reject into the UI startup path.
+  let session: OnnxSessionLike;
+  try {
+    session = await (ort!.InferenceSession as { create: (p: string) => Promise<OnnxSessionLike> }).create(modelPath);
+  } catch (err) {
+    logger.error('ml', 'ONNX session creation failed — falling back to rule engine', { message: (err as Error).message });
+    return {
+      status: () => ({
+        ...status,
+        runtimeAvailable: false,
+        message: `Local model could not be loaded (${(err as Error).message.slice(0, 120)}). Rule-based organization is active.`,
+      }),
+      predict: async () => null,
+      numLabels: () => 0,
+    };
+  }
   const TensorCtor = (ort! as { Tensor: new (type: string, data: Float32Array | BigInt64Array, dims: number[]) => unknown }).Tensor;
   const maxLen = 64;
 
