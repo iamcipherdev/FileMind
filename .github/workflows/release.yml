@@ -21,6 +21,9 @@ jobs:
       - name: Install dependencies
         run: npm install --no-audit --no-fund
 
+      - name: Rebuild better-sqlite3 for Node (tests run under Node, not Electron)
+        run: npm rebuild better-sqlite3
+
       - name: Verify (tests must pass to release)
         run: |
           npm run typecheck
