@@ -82,12 +82,14 @@ jobs:
       - name: Verify packaged native module loads under the Electron ABI
         # Fails the release if better-sqlite3 inside the installer is not
         # loadable by Electron — the exact bug that caused the v0.1.0
-        # "Loading FileMind…" hang.
+        # "Loading FileMind…" hang. Note: electron.exe's exit code is
+        # unreliable on Windows, so we match the success marker instead.
         shell: pwsh
         run: |
           $env:ELECTRON_RUN_AS_NODE = '1'
-          & .\node_modules\electron\dist\electron.exe -e "try { require('./release/win-unpacked/resources/app.asar.unpacked/node_modules/better-sqlite3'); console.log('NATIVE_OK: better-sqlite3 loads under Electron ABI'); } catch (e) { console.error('NATIVE_FAIL: ' + e.message); process.exit(1); }"
-          if ($LASTEXITCODE -ne 0) { throw 'better-sqlite3 in the package is not built for the Electron ABI' }
+          $out = & .\node_modules\electron\dist\electron.exe -e "try { require('./release/win-unpacked/resources/app.asar.unpacked/node_modules/better-sqlite3'); console.log('NATIVE_OK: better-sqlite3 loads under Electron ABI'); } catch (e) { console.error('NATIVE_FAIL: ' + e.message); }" 2>&1 | Out-String
+          Write-Host $out
+          if ($out -notmatch 'NATIVE_OK') { throw 'better-sqlite3 in the package is not built for the Electron ABI' }
 
       - name: Upload installers + zip to the GitHub release
         uses: softprops/action-gh-release@v2
