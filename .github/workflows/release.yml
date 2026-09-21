@@ -31,10 +31,46 @@ jobs:
           npm run build
           npm run build:main
 
+      - name: Prepare code-signing arguments (skips automatically when secrets are absent)
+        id: signing
+        shell: bash
+        env:
+          # --- Azure Trusted Signing (recommended: instant SmartScreen reputation) ---
+          AZURE_CODESIGN_ENDPOINT: ${{ secrets.AZURE_CODESIGN_ENDPOINT }}
+          AZURE_CODESIGN_ACCOUNT: ${{ secrets.AZURE_CODESIGN_ACCOUNT }}
+          AZURE_CERT_PROFILE: ${{ secrets.AZURE_CERT_PROFILE }}
+          # Marker only ("true"/"false") so the step can report the mode without seeing the cert
+          CSC_LINK_PRESENT: ${{ secrets.CSC_LINK != '' }}
+        run: |
+          ARGS=""
+          if [ -n "$AZURE_CODESIGN_ENDPOINT" ] && [ -n "$AZURE_CODESIGN_ACCOUNT" ] && [ -n "$AZURE_CERT_PROFILE" ]; then
+            ARGS="-c.win.azureSignOptions.endpoint=${AZURE_CODESIGN_ENDPOINT}"
+            ARGS="${ARGS} -c.win.azureSignOptions.codeSigningAccountName=${AZURE_CODESIGN_ACCOUNT}"
+            ARGS="${ARGS} -c.win.azureSignOptions.certificateProfileName=${AZURE_CERT_PROFILE}"
+            echo "mode=azure-trusted-signing" >> "$GITHUB_OUTPUT"
+          elif [ -n "$CSC_LINK_PRESENT" ]; then
+            echo "mode=pfx-certificate" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=unsigned" >> "$GITHUB_OUTPUT"
+          fi
+          echo "args=$ARGS" >> "$GITHUB_OUTPUT"
+          echo "Signing mode: $(cat "$GITHUB_OUTPUT" | grep '^mode=' | cut -d= -f2)"
+        # CSC_LINK_PRESENT is just a marker so we can report the mode; the real
+        # certificate is consumed by electron-builder via CSC_LINK below.
+
       - name: Package Windows installer
-        run: npx electron-builder --win
+        run: npx electron-builder --win ${{ steps.signing.outputs.args }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # --- Option B: traditional PFX certificate (electron-builder native support) ---
+          # Base64 of the .pfx file, e.g.  base64 -w0 mycert.pfx
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          # --- Option A: Azure Trusted Signing (auth via EnvironmentCredential) ---
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          # Unsigned builds: electron-builder logs a warning and continues.
 
       - name: Upload installers + zip to the GitHub release
         uses: softprops/action-gh-release@v2

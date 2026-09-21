@@ -68,6 +68,11 @@ The installer includes `models/filemind-transformer.onnx` when present, so ML
 works out of the box. Without it, FileMind runs fully on rules + deterministic
 classification and says so honestly.
 
+> **SmartScreen note:** release builds are unsigned by default, so Windows shows
+> "Windows protected your PC" on first run — click *More info → Run anyway*.
+> To publish signed installers (Azure Trusted Signing, Certum/SignPath certs),
+> see [docs/SIGNING.md](docs/SIGNING.md) — it's secrets-only, no code changes.
+
 ## Local ML — the honest path
 
 FileMind never fakes intelligence. Three models, all trained **from scratch**:

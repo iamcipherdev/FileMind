@@ -2,6 +2,13 @@
 
 All notable changes documented per Keep a Changelog; versioning per SemVer.
 
+## [Unreleased]
+
+### Added
+- Optional code signing in the release workflow: Azure Trusted Signing
+  (`AZURE_*` secrets) or traditional PFX (`CSC_LINK`/`CSC_KEY_PASSWORD`).
+  Skips automatically when secrets are absent. See docs/SIGNING.md.
+
 ## [0.1.0] — 2026-09-21
 
 ### Added
