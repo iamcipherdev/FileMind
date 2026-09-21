@@ -1,0 +1,14 @@
+{
+  "arch": "transformer",
+  "checkpoint": "ml/artifacts/filemind-transformer.pt",
+  "max_len": 64,
+  "num_labels": 13,
+  "special_tokens": {
+    "pad": 0,
+    "unk": 1,
+    "cls": 2,
+    "sep": 3
+  },
+  "tokenizer": "whitespace/alnum word vocab; JS side mirrors ml/filemind_ml/tokenizer.py",
+  "exported_at": "2026-09-21T06:12:34.229098+00:00"
+}

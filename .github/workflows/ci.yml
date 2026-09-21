@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Typecheck (main + renderer)
+        run: npm run typecheck
+
+      - name: Unit + integration tests
+        run: npm run test
+
+      - name: Build renderer
+        run: npm run build
+
+      - name: Compile main process
+        run: npm run build:main
+
+  python-ml:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install ML deps
+        run: pip install scikit-learn joblib
+      - name: ML scripts compile + baseline end-to-end (small)
+        run: |
+          python -m py_compile ml/training/*.py ml/evaluation/*.py ml/export/*.py ml/filemind_ml/*.py
+          python ml/training/prepare_dataset.py --synthetic --per-class 100 --out ml/data/dataset.jsonl
+          python ml/training/train_baseline.py --data ml/data/dataset.jsonl --out ml/artifacts/baseline.joblib

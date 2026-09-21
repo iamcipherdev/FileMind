@@ -1,0 +1,55 @@
+{
+  "name": "filemind",
+  "productName": "FileMind",
+  "version": "0.1.0",
+  "description": "Your files, organized locally. Offline-first intelligent file organizer.",
+  "author": "FileMind Contributors",
+  "license": "MIT",
+  "private": true,
+  "main": "dist-electron/main/main.js",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "typecheck": "tsc -p tsconfig.node.json && tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "build": "vite build",
+    "build:main": "tsc -p tsconfig.build.json",
+    "demo:files": "node scripts/demo-files.mjs",
+    "package": "npm run build:main && npm run build && electron-builder --win",
+    "package:dir": "npm run build:main && npm run build && electron-builder --win --dir",
+    "postinstall": "electron-builder install-app-deps || exit 0"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.2.0",
+    "chokidar": "^3.6.0",
+    "mammoth": "^1.8.0",
+    "pdf-parse": "^1.1.1"
+  },
+  "optionalDependencies": {
+    "onnxruntime-node": "^1.20.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^22.10.2",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
+    "postcss": "^8.4.49",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11",
+    "vitest": "^2.1.8",
+    "lucide-react": "^0.468.0"
+  },
+  "allowScripts": {
+    "better-sqlite3@12.11.1": true,
+    "electron@33.4.11": true,
+    "onnxruntime-node@1.30.0": true,
+    "esbuild@0.21.5": true
+  }
+}

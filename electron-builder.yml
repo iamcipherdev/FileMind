@@ -1,0 +1,29 @@
+appId: com.filemind.app
+productName: FileMind
+copyright: MIT License
+directories:
+  output: release
+files:
+  - dist/**/*
+  - dist-electron/**/*
+  - package.json
+extraResources:
+  - from: models
+    to: models
+    filter:
+      - "**/*.onnx"
+      - "labels.json"
+      - "vocab.json"
+      - "manifest.json"
+asar: true
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: resources/icon.ico
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  shortcutName: FileMind
