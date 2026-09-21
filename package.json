@@ -1,7 +1,7 @@
 {
   "name": "filemind",
   "productName": "FileMind",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Your files, organized locally. Offline-first intelligent file organizer.",
   "author": "FileMind Contributors",
   "license": "MIT",

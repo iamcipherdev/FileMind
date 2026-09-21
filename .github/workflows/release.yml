@@ -31,6 +31,13 @@ jobs:
           npm run build
           npm run build:main
 
+      - name: Force-rebuild better-sqlite3 for the Electron ABI
+        # electron-builder's internal rebuild skips modules whose .node binary
+        # already exists (it does not verify the ABI), which shipped a Node-ABI
+        # binary inside the installer and hung the app on "Loading FileMind…".
+        # electron-rebuild -f downloads the electron-v130 prebuild, fixing that.
+        run: npx electron-rebuild -f -w better-sqlite3
+
       - name: Prepare code-signing arguments (skips automatically when secrets are absent)
         id: signing
         shell: bash
@@ -71,6 +78,16 @@ jobs:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
           # Unsigned builds: electron-builder logs a warning and continues.
+
+      - name: Verify packaged native module loads under the Electron ABI
+        # Fails the release if better-sqlite3 inside the installer is not
+        # loadable by Electron — the exact bug that caused the v0.1.0
+        # "Loading FileMind…" hang.
+        shell: pwsh
+        run: |
+          $env:ELECTRON_RUN_AS_NODE = '1'
+          & .\node_modules\electron\dist\electron.exe -e "try { require('./release/win-unpacked/resources/app.asar.unpacked/node_modules/better-sqlite3'); console.log('NATIVE_OK: better-sqlite3 loads under Electron ABI'); } catch (e) { console.error('NATIVE_FAIL: ' + e.message); process.exit(1); }"
+          if ($LASTEXITCODE -ne 0) { throw 'better-sqlite3 in the package is not built for the Electron ABI' }
 
       - name: Upload installers + zip to the GitHub release
         uses: softprops/action-gh-release@v2

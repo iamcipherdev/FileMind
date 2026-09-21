@@ -23,15 +23,34 @@ const NAV: { id: Page; label: string; icon: React.ComponentType<{ size?: number 
 export default function App() {
   const [page, setPage] = useState<Page>('home');
   const [onboarded, setOnboarded] = useState<boolean | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
-      const s = await api.getSettings();
-      setOnboarded(s.organizeFolders.length > 0);
+      try {
+        const s = await api.getSettings();
+        setOnboarded(s.organizeFolders.length > 0);
+      } catch (e) {
+        setLoadError(e instanceof Error ? e.message : String(e));
+      }
     })();
   }, []);
 
   if (onboarded === null) {
+    if (loadError !== null) {
+      return (
+        <div className="flex h-full flex-col items-center justify-center gap-3 bg-ink-950 px-6 text-center">
+          <div className="text-sm font-semibold text-red-400">FileMind could not start</div>
+          <div className="max-w-md font-mono text-xs leading-relaxed text-ink-400">{loadError}</div>
+          <button
+            onClick={() => { setLoadError(null); window.location.reload(); }}
+            className="rounded-lg bg-ink-800 px-4 py-2 text-xs text-white transition-colors hover:bg-ink-700"
+          >
+            Retry
+          </button>
+        </div>
+      );
+    }
     return <div className="flex h-full items-center justify-center text-ink-400 text-sm">Loading FileMind…</div>;
   }
 
