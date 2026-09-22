@@ -43,7 +43,12 @@ describe('isFileMindRuntimePath', () => {
   });
 });
 
-describe('FolderWatcher hardening', () => {
+// Diagnostic variants B/C disable the watcher by design; the disabled
+// behavior is covered by diagnosticVariants.test.ts via env overrides.
+const watchEnabled = !process.env.FILEMIND_DISABLE_WATCHER;
+const watchDescribe = watchEnabled ? describe : describe.skip;
+
+watchDescribe('FolderWatcher hardening', () => {
   it('refuses to watch FileMind runtime dirs and protected dirs', async () => {
     process.env.FILEMIND_TEST_RUNTIME_PATHS = runtimeDir;
     const dirA = mkd(); created.push(dirA);
