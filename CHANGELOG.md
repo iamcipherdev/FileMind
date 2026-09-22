@@ -2,6 +2,42 @@
 
 All notable changes documented per Keep a Changelog; versioning per SemVer.
 
+## [0.1.4] — 2026-09-22
+
+### Changed — architecture: ML is isolated and lazy; watching is explicit
+- `ml:status` no longer initializes ONNX: it performs lightweight file/package
+  checks only. Opening the app can never touch the native ML stack.
+- onnxruntime-node now runs in an **isolated Electron utilityProcess**
+  (`src/main/ml/worker.ts`). A native fault in the ML runtime can no longer
+  terminate FileMind: the worker dies, the failure is caught, and the
+  deterministic/rule classifier continues (honest fallback, no fabricated
+  results). Bounded retries; explicit `ml:warmup` for tests/opt-in.
+- ML initializes **lazily on first real classification** (scan pipeline),
+  never on startup.
+- Selecting organize folders during onboarding no longer silently enables
+  filesystem watching: `watchedFolders` starts empty and watching is an
+  explicit opt-in in Settings.
+- `watcher.update()` is awaited, caught and logged at every call site
+  (settings save, watcher start, UI-ready).
+
+### Added — crash-isolation experiment + installed-app E2E
+- Diagnostic variants A/B/C (ONNX disabled / watcher disabled / both) with
+  compile-time prevention of the actual code paths and lifecycle markers
+  (HOME_MOUNTED, ML_STATUS_REQUESTED, ONNX_REQUIRE_*, ONNX_SESSION_*,
+  WATCHER_*, ML_WORKER_*, PROCESS_EXIT) in the synchronous bootstrap log.
+- The release pipeline now runs the REAL reproduction before publishing:
+  silent NSIS install → clean user data → real onboarding with a picked
+  folder → Home → ml:status → isolated ML warmup (packaged ONNX session
+  proven) → watcher opt-in → 30s dwell → graceful close → 5 relaunch cycles
+  with process-liveness checks. The release fails unless every step passes.
+
+### Fixed
+- Windows test portability (tests no longer create usable folders inside
+  `AppData`, which FileMind's own protection rules correctly refuse) and
+  vitest env isolation (forked pool). Windows runners now fail the build
+  when tests fail — pwsh previously masked `npm run test` exit codes, so
+  Windows-only test failures had been invisible in earlier releases.
+
 ## [0.1.3] — 2026-09-22
 
 ### Added — early-startup instrumentation (provable startup, no more silent exits)

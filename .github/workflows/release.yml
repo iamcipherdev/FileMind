@@ -122,6 +122,62 @@ jobs:
           }
           Get-Process FileMind -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 
+      - name: End-to-end installed-app test (onboarding -> Home -> ML -> relaunch x5)
+        # The real reproduction on the REAL installer: silent NSIS install,
+        # clean user data, real onboarding (folder selection persisted),
+        # Home mount, lightweight ml:status, isolated ML worker warmup with
+        # packaged ONNX, explicit watcher opt-in, 30s dwell, graceful close
+        # and 5 relaunch cycles. The release FAILS if any step does not pass.
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem .\release -Filter '*.exe' | Where-Object { $_.Name -notmatch 'blockmap' } | Select-Object -First 1
+          $p = Start-Process -FilePath $setup.FullName -ArgumentList '/S' -Wait -PassThru
+          Write-Host "installer exit code: $($p.ExitCode)"
+          $exe = Get-ChildItem "$env:LOCALAPPDATA\Programs" -Filter 'FileMind.exe' -Recurse -Depth 2 | Select-Object -First 1
+          if (-not $exe) { throw 'FileMind.exe not found after silent install' }
+          "INSTALLED_EXE=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Get-Process FileMind -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Remove-Item "$env:APPDATA\FileMind" -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item (Join-Path $env:TEMP 'FileMind-bootstrap.log') -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path 'C:\FileMindTest\SampleFolder' | Out-Null
+          1..25 | ForEach-Object { Set-Content -Path "C:\FileMindTest\SampleFolder\note$_.txt" -Value "test file $_" }
+          Start-Process -FilePath $exe.FullName -ArgumentList '--remote-debugging-port=9222'
+          Start-Sleep -Seconds 6
+          node scripts/e2e-driver.mjs --phase onboarding --folder "C:\FileMindTest\SampleFolder" --warmup --watch --wait-home-ms 45000
+          Start-Sleep -Seconds 30
+          if (-not (Get-Process FileMind -ErrorAction SilentlyContinue)) { throw 'PROCESS TERMINATED during 30s dwell on Home' }
+          $log = Join-Path $env:TEMP 'FileMind-bootstrap.log'
+          $c = Get-Content $log -Raw
+          Write-Host $c
+          foreach ($m in @('HOME_MOUNTED','ML_STATUS_REQUESTED','ML_WORKER_READY','ONNX_SESSION_SUCCESS','WATCHER_UPDATE_SUCCESS','E2E_HOME_VERIFIED')) {
+            if ($c -notmatch "MARKER $m") { throw "missing marker: $m" }
+          }
+          if ($c -match 'FATAL during') { throw 'a fatal error was recorded during the E2E run — see bootstrap log above' }
+          (Get-Process FileMind | Select-Object -First 1).CloseMainWindow() | Out-Null
+          $deadline = (Get-Date).AddSeconds(15)
+          while ((Get-Process FileMind -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
+          Get-Process FileMind -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 2
+          foreach ($i in 1..5) {
+            Write-Host "=== relaunch $i ==="
+            Start-Process -FilePath $exe.FullName
+            Start-Sleep -Seconds 12
+            if (-not (Get-Process FileMind -ErrorAction SilentlyContinue)) { throw "RELAUNCH ${i}: process terminated within 12s" }
+            Start-Sleep -Seconds 18
+            if (-not (Get-Process FileMind -ErrorAction SilentlyContinue)) { throw "RELAUNCH ${i}: process died before 30s" }
+            Write-Host "relaunch ${i}: alive for 30s"
+            (Get-Process FileMind | Select-Object -First 1).CloseMainWindow() | Out-Null
+            $deadline = (Get-Date).AddSeconds(15)
+            while ((Get-Process FileMind -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
+            Get-Process FileMind -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 2
+          }
+          $c = Get-Content $log -Raw
+          $homes = ([regex]::Matches($c, 'MARKER HOME_MOUNTED')).Count
+          Write-Host "HOME_MOUNTED count across launches: $homes"
+          if ($homes -lt 6) { throw "expected Home mount on onboarding + 5 relaunches, got $homes" }
+          Write-Host 'END-TO-END INSTALLED TEST PASSED'
+
       - name: Upload installers + zip to the GitHub release
         uses: softprops/action-gh-release@v2
         with:
