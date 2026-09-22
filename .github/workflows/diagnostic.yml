@@ -69,7 +69,7 @@ jobs:
       - name: Locate installer
         shell: pwsh
         run: |
-          $setup = Get-ChildItem .\release -Filter 'FileMind-Setup-*.exe' | Where-Object { $_.Name -notmatch 'blockmap' } | Select-Object -First 1
+          $setup = Get-ChildItem .\release -Filter '*.exe' | Where-Object { $_.Name -notmatch 'blockmap' } | Select-Object -First 1
           "SETUP_EXE=$($setup.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
           Write-Host "installer: $($setup.FullName)"
 
