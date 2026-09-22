@@ -49,8 +49,9 @@ describe('safety: conflict resolution', () => {
     expect(resolveConflict('/d/a.txt', () => false)).toBe('/d/a.txt');
   });
   it('appends (2), (3)… on collision', () => {
-    const taken = new Set(['/d/a.txt', '/d/a (2).txt']);
-    expect(resolveConflict('/d/a.txt', (p) => taken.has(p))).toBe(path.join('/d', 'a (3).txt'));
+    // All path strings go through path.join so separators match on every OS.
+    const taken = new Set([path.join('/d', 'a.txt'), path.join('/d', 'a (2).txt')]);
+    expect(resolveConflict(path.join('/d', 'a.txt'), (p) => taken.has(p))).toBe(path.join('/d', 'a (3).txt'));
   });
   it('never proposes to overwrite', () => {
     const exists = () => true;
