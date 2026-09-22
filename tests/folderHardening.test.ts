@@ -6,6 +6,7 @@ import { FolderWatcher } from '../src/main/services/watcher';
 import { isFileMindRuntimePath } from '../src/main/services/safety';
 import { scanFolders } from '../src/main/services/scanner';
 import { auditFolders, sanitizeSettingsFolders } from '../src/main/services/folderGuard';
+import { makeTempDir } from './helpers';
 
 /**
  * REGRESSION tests for the folder-selection startup bug family:
@@ -16,7 +17,7 @@ import { auditFolders, sanitizeSettingsFolders } from '../src/main/services/fold
  */
 
 const runtimeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'filemind-runtime-'));
-const mkd = () => fs.mkdtempSync(path.join(os.tmpdir(), 'filemind-t-'));
+const mkd = () => makeTempDir('filemind-t');
 const created: string[] = [];
 
 afterEach(() => {
