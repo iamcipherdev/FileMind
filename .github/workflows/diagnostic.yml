@@ -21,6 +21,10 @@ on:
   push:
     branches: [experiment/crash-isolation]
 
+defaults:
+  run:
+    shell: bash
+
 permissions:
   contents: read
 

@@ -1,15 +1,15 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
 import { findDuplicates } from '../src/main/services/duplicates';
 import { scanFolders } from '../src/main/services/scanner';
 import { extractText } from '../src/main/services/textExtract';
 import { generateDemoFiles } from '../src/main/services/demoFiles';
+import { makeTempDir } from './helpers';
 
 let dirs: string[] = [];
 function tmp(): string {
-  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'filemind-dup-'));
+  const d = makeTempDir('filemind-dup');
   dirs.push(d);
   return d;
 }

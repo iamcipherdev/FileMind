@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import os from 'node:os';
+import { makeTempDir } from './helpers';
 import fs from 'node:fs';
 import path from 'node:path';
 import { TransactionEngine, JournalPort } from '../src/main/services/transaction';
@@ -7,7 +7,7 @@ import type { Suggestion } from '../src/shared/types';
 
 let dirs: string[] = [];
 function tmp(): string {
-  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'filemind-tx-'));
+  const d = makeTempDir('filemind-tx');
   dirs.push(d);
   return d;
 }

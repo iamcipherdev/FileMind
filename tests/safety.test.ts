@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import path from 'node:path';
 import {
   isInsideRoot, assertSafeDestination, resolveConflict, sanitizeNameSegment,
   isCautiousFile, isProtectedDir, SafetyError,
@@ -49,7 +50,7 @@ describe('safety: conflict resolution', () => {
   });
   it('appends (2), (3)… on collision', () => {
     const taken = new Set(['/d/a.txt', '/d/a (2).txt']);
-    expect(resolveConflict('/d/a.txt', (p) => taken.has(p))).toBe('/d/a (3).txt');
+    expect(resolveConflict('/d/a.txt', (p) => taken.has(p))).toBe(path.join('/d', 'a (3).txt'));
   });
   it('never proposes to overwrite', () => {
     const exists = () => true;
