@@ -3,6 +3,8 @@ import path from 'node:path';
 import type { Classification, MlStatus } from '../../shared/types';
 import { normalizeConfidence } from './confidence';
 import { logger } from '../logger';
+import { marker } from '../bootstrap';
+import { DISABLE_ONNX, VARIANT_NAME } from '../variant';
 
 /**
  * Local ML classifier (ONNX Runtime).
@@ -45,6 +47,8 @@ export function resolveModelDir(explicit?: string): string {
 }
 
 export async function createMlClassifier(modelDir?: string): Promise<MlClassifier> {
+  // Runtime env override lets local runs force a variant without a rebuild.
+  const onnxDisabled = DISABLE_ONNX || process.env.FILEMIND_DISABLE_ONNX === '1';
   const dir = resolveModelDir(modelDir);
   const modelPath = path.join(dir, MODEL_FILE);
   const vocabPath = path.join(dir, VOCAB_FILE);
@@ -53,26 +57,39 @@ export async function createMlClassifier(modelDir?: string): Promise<MlClassifie
   let runtimeAvailable = false;
   let ort: Record<string, unknown> | null = null;
 
-  try {
-    // Dynamic require: the dependency is optional; absence must degrade, not crash.
-    const req = eval('require') as NodeRequire;
-    ort = (req('onnxruntime-node') as { InferenceSession: unknown }) ?? null;
-    runtimeAvailable = !!ort;
-  } catch {
+  if (onnxDisabled) {
+    // Diagnostic variant: the native module is never required and no session
+    // is ever created — the ONNX code path does not execute at all.
+    marker('ONNX_DISABLED_BY_VARIANT');
+    logger.warn('ml', `ONNX loading disabled in diagnostic variant ${VARIANT_NAME}`);
     runtimeAvailable = false;
+  } else {
+    try {
+      // Dynamic require: the dependency is optional; absence must degrade, not crash.
+      marker('ONNX_REQUIRE_STARTED');
+      const req = eval('require') as NodeRequire;
+      ort = (req('onnxruntime-node') as { InferenceSession: unknown }) ?? null;
+      runtimeAvailable = !!ort;
+      marker('ONNX_REQUIRE_SUCCESS');
+    } catch {
+      runtimeAvailable = false;
+      marker('ONNX_REQUIRE_FAILED');
+    }
   }
 
   const status: MlStatus = {
     runtimeAvailable,
     modelInstalled,
     modelPath: modelInstalled ? modelPath : null,
-    message: !runtimeAvailable && !modelInstalled
-      ? 'Local ML model not installed. Rule-based organization is active.'
-      : !modelInstalled
-        ? 'ONNX runtime present but no trained model found. Rule-based organization is active. Train and export via ml/ (see MODEL_CARD.md).'
-        : !runtimeAvailable
-          ? 'Model found but onnxruntime-node is missing. Run: npm i onnxruntime-node'
-          : 'Local ML model ready (runs fully offline).',
+    message: onnxDisabled
+      ? `Local ML is disabled in this diagnostic build (${VARIANT_NAME}). Rule-based organization is active.`
+      : !runtimeAvailable && !modelInstalled
+        ? 'Local ML model not installed. Rule-based organization is active.'
+        : !modelInstalled
+          ? 'ONNX runtime present but no trained model found. Rule-based organization is active. Train and export via ml/ (see MODEL_CARD.md).'
+          : !runtimeAvailable
+            ? 'Model found but onnxruntime-node is missing. Run: npm i onnxruntime-node'
+            : 'Local ML model ready (runs fully offline).',
   };
 
   if (!runtimeAvailable || !modelInstalled) {
@@ -101,7 +118,9 @@ export async function createMlClassifier(modelDir?: string): Promise<MlClassifie
   // degrade to the rule engine — it must never reject into the UI startup path.
   let session: OnnxSessionLike;
   try {
+    marker('ONNX_SESSION_STARTED');
     session = await (ort!.InferenceSession as { create: (p: string) => Promise<OnnxSessionLike> }).create(modelPath);
+    marker('ONNX_SESSION_SUCCESS');
   } catch (err) {
     logger.error('ml', 'ONNX session creation failed — falling back to rule engine', { message: (err as Error).message });
     return {

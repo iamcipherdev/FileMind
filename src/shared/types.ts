@@ -231,6 +231,8 @@ export interface FilemindApi {
   generateDemoFiles: (dir: string) => Promise<{ created: number; dir: string }>;
   getAppInfo: () => Promise<AppInfo>;
   notifyUiReady: () => Promise<void>;
+  /** Diagnostic/lifecycle marker from the renderer (e.g. HOME_MOUNTED). */
+  marker: (name: string) => Promise<void>;
 
   // events
   onEvent: (cb: (e: AppEvent) => void) => () => void;

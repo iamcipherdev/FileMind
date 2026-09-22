@@ -1,0 +1,197 @@
+name: Diagnostic — crash isolation matrix (A/B/C/normal)
+
+# Experimental isolation of the Windows early-termination reproduction:
+#   fresh app -> onboarding -> select folder -> finish -> Home -> terminate.
+# Four installed-app runs on real Windows (CI runners are Windows machines):
+#   normal = ONNX + watcher enabled (faithful reproduction)
+#   A      = ONNX disabled (no require, no session), watcher enabled
+#   B      = ONNX enabled, watcher disabled (chokidar never constructed)
+#   C      = both disabled
+# Each run: silent NSIS install -> clean user data -> real onboarding driven
+# through the UI (only the native folder dialog stubbed) -> 30s dwell ->
+# graceful close -> 5 plain relaunches -> marker assertions from
+# %TEMP%\FileMind-bootstrap.log.
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_variants:
+        description: 'Variants to test (csv subset of normal,A,B,C)'
+        default: 'normal,A,B,C'
+  push:
+    branches: [experiment/crash-isolation]
+
+permissions:
+  contents: read
+
+jobs:
+  variant:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [normal, A, B, C]
+    env:
+      VARIANT: ${{ matrix.variant }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Select diagnostic variant
+        run: node scripts/set-variant.mjs ${{ matrix.variant }}
+
+      - name: Verify (typecheck + tests under Node)
+        run: |
+          npm rebuild better-sqlite3
+          npm run typecheck
+          npm run test
+
+      - name: Build + package NSIS installer
+        run: |
+          npm run build
+          npm run build:main
+          npx electron-rebuild -f -w better-sqlite3
+          npx electron-builder --win
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Locate installer
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem .\release -Filter 'FileMind-Setup-*.exe' | Where-Object { $_.Name -notmatch 'blockmap' } | Select-Object -First 1
+          "SETUP_EXE=$($setup.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "installer: $($setup.FullName)"
+
+      - name: Install the NSIS installer silently
+        shell: pwsh
+        run: |
+          Write-Host "Installing $env:SETUP_EXE"
+          $p = Start-Process -FilePath $env:SETUP_EXE -ArgumentList '/S' -Wait -PassThru
+          Write-Host "installer exit code: $($p.ExitCode)"
+          $exe = Get-ChildItem "$env:LOCALAPPDATA\Programs" -Filter 'FileMind.exe' -Recurse -Depth 2 | Select-Object -First 1
+          if (-not $exe) { throw 'FileMind.exe not found after silent install' }
+          "INSTALLED_EXE=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "installed at: $($exe.FullName)"
+
+      - name: Clean user data + old bootstrap log (fresh app state)
+        shell: pwsh
+        run: |
+          Get-Process FileMind -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Remove-Item "$env:APPDATA\FileMind" -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item (Join-Path $env:TEMP 'FileMind-bootstrap.log') -Force -ErrorAction SilentlyContinue
+          Write-Host 'user data + bootstrap log cleared'
+
+      - name: Create real temporary folder to select
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path 'C:\FileMindTest\SampleFolder' | Out-Null
+          1..25 | ForEach-Object { Set-Content -Path "C:\FileMindTest\SampleFolder\note$_.txt" -Value "test file $_" }
+          Write-Host 'test folder ready'
+
+      - name: Launch installed app (debug port for UI driving)
+        shell: pwsh
+        run: |
+          Start-Process -FilePath $env:INSTALLED_EXE -ArgumentList '--remote-debugging-port=9222'
+          Start-Sleep -Seconds 6
+          Write-Host 'launched'
+
+      - name: Drive real onboarding -> wait for Home (CDP)
+        run: node scripts/e2e-driver.mjs --phase onboarding --folder "C:\FileMindTest\SampleFolder" --wait-home-ms 45000
+
+      - name: Stay on Home for 30 seconds
+        shell: pwsh
+        run: |
+          Start-Sleep -Seconds 30
+          $alive = Get-Process FileMind -ErrorAction SilentlyContinue
+          if (-not $alive) { throw 'PROCESS TERMINATED during 30s dwell on Home (the reproduction!)' }
+          Write-Host 'process alive after 30s on Home'
+
+      - name: Assert experiment markers from bootstrap log
+        shell: pwsh
+        run: |
+          $log = Join-Path $env:TEMP 'FileMind-bootstrap.log'
+          $c = Get-Content $log -Raw
+          Write-Host $c
+          $must = @('HOME_MOUNTED','ML_STATUS_REQUESTED')
+          foreach ($m in $must) { if ($c -notmatch "MARKER $m") { throw "missing marker: $m" } }
+          if ('${{ matrix.variant }}' -in @('normal','B')) {
+            if ($c -notmatch 'MARKER ONNX_REQUIRE_STARTED') { throw 'ONNX path did not execute (expected in this variant)' }
+            if ($c -notmatch 'MARKER ONNX_SESSION_SUCCESS') { throw 'packaged ONNX session never succeeded (production ONNX test failed)' }
+          } else {
+            if ($c -match 'MARKER ONNX_REQUIRE_STARTED') { throw 'ONNX code path executed although disabled in this variant' }
+            if ($c -notmatch 'ONNX_DISABLED_BY_VARIANT') { throw 'ONNX disable marker missing' }
+          }
+          if ('${{ matrix.variant }}' -in @('normal','A')) {
+            if ($c -notmatch 'MARKER WATCHER_UPDATE_SUCCESS') { throw 'watcher did not start (expected in this variant)' }
+          } else {
+            if ($c -match 'MARKER WATCHER_UPDATE_STARTED') { throw 'watcher code path executed although disabled in this variant' }
+          }
+          Write-Host 'marker assertions passed'
+
+      - name: Close normally (user-style close), then 5 relaunch cycles
+        shell: pwsh
+        run: |
+          $exe = $env:INSTALLED_EXE
+          # graceful close of the onboarding session
+          (Get-Process FileMind | Select-Object -First 1).CloseMainWindow() | Out-Null
+          $deadline = (Get-Date).AddSeconds(15)
+          while ((Get-Process FileMind -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
+          Get-Process FileMind -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 2
+
+          foreach ($i in 1..5) {
+            Write-Host "=== relaunch $i ==="
+            Start-Process -FilePath $exe
+            Start-Sleep -Seconds 12
+            $alive = Get-Process FileMind -ErrorAction SilentlyContinue
+            if (-not $alive) { throw "RELAUNCH ${i}: process terminated within 12s (reproduction confirmed on variant $env:VARIANT)" }
+            Write-Host "relaunch ${i}: alive after 12s"
+            Start-Sleep -Seconds 18
+            if (-not (Get-Process FileMind -ErrorAction SilentlyContinue)) { throw "RELAUNCH ${i}: process died between 12s and 30s" }
+            Write-Host "relaunch ${i}: alive for 30s total"
+            (Get-Process FileMind | Select-Object -First 1).CloseMainWindow() | Out-Null
+            $deadline = (Get-Date).AddSeconds(15)
+            while ((Get-Process FileMind -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
+            Get-Process FileMind -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 2
+          }
+          Write-Host 'ALL RELAUNCH CYCLES PASSED'
+
+      - name: Final bootstrap log (all cycles)
+        shell: pwsh
+        run: |
+          $log = Join-Path $env:TEMP 'FileMind-bootstrap.log'
+          $out = Join-Path $env:GITHUB_WORKSPACE "bootstrap-${{ matrix.variant }}.log"
+          Copy-Item $log $out -Force
+          Write-Host "=== FINAL MARKER TIMELINE ($env:VARIANT) ==="
+          Select-String -Path $log -Pattern 'MARKER|FATAL|lock' | ForEach-Object { Write-Host $_.Line }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: diagnostics-${{ matrix.variant }}
+          path: |
+            bootstrap-${{ matrix.variant }}.log
+            release/*.exe
+          if-no-files-found: error
+
+  interpret:
+    needs: [variant]
+    runs-on: windows-latest
+    if: always()
+    steps:
+      - name: Matrix outcome summary
+        shell: pwsh
+        run: |
+          Write-Host "variant jobs conclusion: normal=${{ needs.variant.outputs }}"
+          Write-Host 'See the variant job conclusions above:'
+          Write-Host '  A passes + B fails  -> ONNX path is the likely cause'
+          Write-Host '  A fails + B passes  -> watcher path is the likely cause'
+          Write-Host '  C fails             -> neither alone explains it'
+          Write-Host '  A and B pass, normal fails -> interaction/race'

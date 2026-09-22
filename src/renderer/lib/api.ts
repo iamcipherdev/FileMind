@@ -38,6 +38,7 @@ function mockApi(): FilemindApi {
     getAppInfo: async () => ({ version: '0.1.0', platform: 'browser', dataDir: '', logFilePath: '', dbRecoveredFromCorruption: false }),
     onEvent: () => () => undefined,
     notifyUiReady: async () => undefined,
+    marker: async () => undefined,
   };
 }
 

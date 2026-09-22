@@ -15,6 +15,7 @@ import { generateDemoFiles } from './services/demoFiles';
 import { FolderWatcher } from './services/watcher';
 import { auditFolders, sanitizeSettingsFolders } from './services/folderGuard';
 import { logger } from './logger';
+import { marker } from './bootstrap';
 import crypto from 'node:crypto';
 import type { FileMindSettings, FolderIssue } from '../shared/types';
 
@@ -238,7 +239,7 @@ export function wireIpc(getWin: () => BrowserWindow | null): void {
     return { ...s, folderIssues: auditFolders(s) };
   }));
 
-  safeHandle('settings:set', (_e: unknown, s: FileMindSettings) => withRepo((r) => {
+  safeHandle('settings:set', async (_e: unknown, s: FileMindSettings) => withRepo(async (r) => {
     const { rejected } = sanitizeSettingsFolders(s);
     r.setSettings(s);
     logger.info('settings', 'settings saved', {
@@ -246,7 +247,17 @@ export function wireIpc(getWin: () => BrowserWindow | null): void {
       watchedFolders: s.watchedFolders,
       rejectedFolders: rejected,
     });
-    watcher?.update(s.watchedFolders);
+    // Watcher updates are awaited, caught and logged — a watcher problem must
+    // never escape as an unhandled rejection and can never block the save.
+    if (watcher) {
+      try {
+        await watcher.update(s.watchedFolders);
+      } catch (err) {
+        logger.error('watcher', 'update failed after settings save (continuing)', {
+          message: (err as Error).message,
+        });
+      }
+    }
     return { rejected };
   }));
 
@@ -260,6 +271,10 @@ export function wireIpc(getWin: () => BrowserWindow | null): void {
   });
 
   safeHandle('ml:status', async () => {
+    // FAITHFUL reproduction path (v0.1.2/v0.1.3 architecture): this currently
+    // initializes the ONNX runtime in the main process. Marked so experiments
+    // can prove exactly how far this path gets before any termination.
+    marker('ML_STATUS_REQUESTED');
     if (!ml) ml = await createMlClassifier();
     return ml.status();
   });
@@ -294,6 +309,14 @@ export function wireIpc(getWin: () => BrowserWindow | null): void {
   safeHandle('ui:ready', () => {
     logger.info('main', 'UI ready — starting background services');
     withRepo((r) => { watcher!.update(r.getSettings().watchedFolders); });
+  });
+
+  // Diagnostic/lifecycle marker from the renderer, forwarded to the
+  // synchronous bootstrap log (survives even a native crash).
+  safeHandle('app:marker', (_e: unknown, name: unknown) => {
+    if (typeof name === 'string' && name.length > 0 && name.length <= 64 && /^[A-Z0-9_:-]+$/i.test(name)) {
+      marker(name.toUpperCase());
+    }
   });
 }
 

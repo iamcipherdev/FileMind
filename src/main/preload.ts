@@ -38,6 +38,7 @@ const api = {
   openPath: (p: string) => ipcRenderer.invoke('fs:openPath', p),
   startWatcher: () => ipcRenderer.invoke('watcher:start'),
   notifyUiReady: () => ipcRenderer.invoke('ui:ready'),
+  marker: (name: string) => ipcRenderer.invoke('app:marker', name),
 
   onEvent: (cb: (e: AppEvent) => void) => {
     const listener = (_: unknown, e: AppEvent) => cb(e);

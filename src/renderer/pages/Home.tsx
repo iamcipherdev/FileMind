@@ -11,6 +11,8 @@ export default function HomePage({ onNavigate }: { onNavigate: (p: string) => vo
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    // Diagnostic marker: proves the Home page mounted (post-onboarding path).
+    void api.marker('HOME_MOUNTED');
     (async () => {
       try {
         const [s, info, m, h] = await Promise.all([api.getSettings(), api.getAppInfo(), api.getMlStatus(), api.listHistory()]);

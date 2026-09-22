@@ -41,6 +41,15 @@ function raw(line: string): void {
 /** Ordered startup markers (user-facing names, logged verbatim). */
 export const BOOTSTRAP_FILE_PATH = BOOTSTRAP_FILE;
 
+/**
+ * Experiment/lifecycle markers (HOME_MOUNTED, ML_STATUS_REQUESTED,
+ * ONNX_REQUIRE_STARTED, ... PROCESS_EXIT). Written synchronously so a native
+ * crash immediately after a marker leaves the marker on disk.
+ */
+export function marker(name: string): void {
+  raw(`MARKER ${name}`);
+}
+
 export function bootstrapLog(line: string): void {
   raw(line);
 }
@@ -100,6 +109,7 @@ export function installBootstrapHandlers(): void {
     bootstrapFatal('unhandledRejection (process stays alive)', reason);
   });
   process.on('exit', (code) => {
+    raw(`MARKER PROCESS_EXIT code=${code}`);
     raw(`BOOTSTRAP: process exit, code=${code}`);
   });
   // Renderer / child process deaths are fatal-ish signals for a windowed app:

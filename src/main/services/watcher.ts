@@ -2,6 +2,8 @@ import chokidar from 'chokidar';
 import path from 'node:path';
 import fsSync from 'node:fs';
 import { isFileMindRuntimePath, isProtectedDir } from './safety';
+import { marker } from '../bootstrap';
+import { DISABLE_WATCHER, VARIANT_NAME } from '../variant';
 
 /**
  * Folder watcher. Debounces bursts (save storms, sync tools) and emits a
@@ -44,6 +46,15 @@ export class FolderWatcher {
   }
 
   async update(folders: string[]): Promise<void> {
+    // Diagnostic variant: chokidar is never constructed — the watcher code
+    // path does not execute at all (not a UI-level toggle).
+    if (DISABLE_WATCHER || process.env.FILEMIND_DISABLE_WATCHER === '1') {
+      marker('WATCHER_DISABLED_BY_VARIANT');
+      this.warn(`filesystem watcher disabled in diagnostic variant ${VARIANT_NAME}`);
+      this.currentFolders = [];
+      return;
+    }
+    marker('WATCHER_UPDATE_STARTED');
     const valid = this.filterFolders(folders);
     if (this.isWatching(valid)) {
       this.info('watcher already watching requested folders — no change');
@@ -94,6 +105,7 @@ export class FolderWatcher {
       });
 
     this.info('watcher started', { folders: valid });
+    marker('WATCHER_UPDATE_SUCCESS');
   }
 
   /** Drop folders that must never be watched (missing, protected, our own). */
