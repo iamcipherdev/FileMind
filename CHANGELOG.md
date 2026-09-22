@@ -2,6 +2,46 @@
 
 All notable changes documented per Keep a Changelog; versioning per SemVer.
 
+## [0.1.3] — 2026-09-22
+
+### Added — early-startup instrumentation (provable startup, no more silent exits)
+- `%TEMP%\FileMind-bootstrap.log`: written synchronously (flushed line by line)
+  from the absolute first executable line of the app — BEFORE settings,
+  database, folders, tray, watchers, scanning, window or native modules.
+  Records `BOOTSTRAP: PROCESS STARTED`, the ordered steps 01–15 (entrypoint,
+  environment, user-data path, config, database, window creation, UI load,
+  tray-by-design note, folder restoration, scanner, watcher) and
+  `BOOTSTRAP COMPLETE`. A process that dies early can no longer do so without
+  leaving an exact record of the last step reached.
+- Resource audit in the bootstrap log (`RESOURCE: expected/exists/readable`)
+  for the frontend bundle, preload script, model files and the native
+  better-sqlite3 / onnxruntime binaries — a packaging mistake is provable
+  from the log alone.
+- Global fatal handlers installed before everything else: uncaughtException,
+  unhandledRejection, renderer crash (`render-process-gone`), GPU/utility
+  child-process crash (`child-process-gone`) and process exit code are all
+  written to the bootstrap log even when the normal logger is not up yet.
+- A startup failure now shows a native error dialog pointing at the bootstrap
+  log path instead of letting the process disappear silently.
+- The single-instance lock result is logged (`acquired` / `DENIED — exiting by
+  design`). Previously a still-running (zombie) previous instance made every
+  new double-click vanish in a fraction of a second with zero trace; that
+  exact scenario is now provable in the log and the running window is focused.
+- CI release pipeline now smoke-tests the PACKAGED app itself: after building
+  the installer, `FileMind.exe` is launched twice on the build runner and the
+  release fails unless the process stays alive and reaches
+  `BOOTSTRAP COMPLETE` both times (native-ABI verification remains in place).
+
+### Fixed
+- Uncaught-exception handlers were registered after the single-instance
+  check and only inside `app.whenReady()`; anything failing earlier could
+  kill the process invisibly. Handlers now exist from the first module load.
+- `app.whenReady()` startup chain had no rejection handler — a throw during
+  `wireIpc()`/window creation left a windowless process. It is now wrapped,
+  logged, surfaced in a dialog and cannot strand the app invisibly.
+- `process.stdout.write` in the logger could throw in packaged GUI mode
+  (no console attached); writes are now guarded — the file log is unaffected.
+
 ## [0.1.2] — 2026-09-21
 
 ### Fixed

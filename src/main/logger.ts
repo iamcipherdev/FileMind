@@ -47,8 +47,12 @@ export function log(level: LogLevel, scope: string, message: string, extra?: unk
   const line = formatLine(level, scope, message, extra);
 
   // Always mirror to stdout/stderr — visible with --enable-logging and in dev.
-  if (level === 'error') process.stderr.write(line + '\n');
-  else process.stdout.write(line + '\n');
+  // Wrapped: in a packaged Windows GUI app the console handle can be invalid,
+  // and a logging call must never be able to throw into startup code.
+  try {
+    if (level === 'error') process.stderr.write(line + '\n');
+    else process.stdout.write(line + '\n');
+  } catch { /* console unavailable in packaged GUI mode — file log still written */ }
 
   if (!writeStream || !logFile) return;
   try {

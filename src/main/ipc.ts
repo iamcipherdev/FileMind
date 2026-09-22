@@ -16,7 +16,7 @@ import { FolderWatcher } from './services/watcher';
 import { auditFolders, sanitizeSettingsFolders } from './services/folderGuard';
 import { logger } from './logger';
 import crypto from 'node:crypto';
-import type { FileMindSettings } from '../shared/types';
+import type { FileMindSettings, FolderIssue } from '../shared/types';
 
 let db: Database | null = null;
 let dbRecoveredFromCorruption = false;
@@ -26,6 +26,29 @@ let engine: TransactionEngine | null = null;
 let watcher: FolderWatcher | null = null;
 let scanCancelFlag = false;
 let scanRunning = false;
+
+/**
+ * DB lifecycle. Opened lazily on first use, resilient against transient locks
+ * and corruption (see openDatabaseResilient). Module-level so both IPC handlers
+ * and the startup self-check share one connection.
+ */
+function ensureDb(): Repository {
+  if (!db) {
+    const dbPath = path.join(app.getPath('userData'), 'filemind.db');
+    const res = openDatabaseResilient(dbPath, (msg: string) => logger.warn('db', msg));
+    db = res.db;
+    dbRecoveredFromCorruption = res.recovered;
+    if (res.recovered) {
+      logger.error('db', 'previous database was unreadable and has been quarantined; a fresh one was created', {
+        quarantinedTo: res.quarantinedTo ?? null,
+      });
+    }
+    repo = new Repository(db);
+    repo.ensureCategories();
+    logger.info('db', 'database ready', { path: dbPath, recovered: res.recovered });
+  }
+  return repo!;
+}
 
 export function wireIpc(getWin: () => BrowserWindow | null): void {
   // Store the ACCESSOR, not a snapshot: the window is created after wiring,
@@ -42,28 +65,11 @@ export function wireIpc(getWin: () => BrowserWindow | null): void {
   };
 
   /**
-   * DB lifecycle. Opened lazily on first use, resilient against:
-   *  - transient locks (antivirus, a previous instance still exiting): retry + 5s busy_timeout
-   *  - a corrupted database file: quarantine to *.corrupt-<ts> and recreate,
-   *    so the user NEVER has to reinstall FileMind over a bad db.
+   * DB lifecycle: opened lazily via ensureDb() (module-level), resilient
+   * against transient locks (antivirus, a previous instance still exiting)
+   * and a corrupted database file (quarantine + recreate — see database.ts).
    */
-  const ensure = () => {
-    if (!db) {
-      const dbPath = path.join(app.getPath('userData'), 'filemind.db');
-      const res = openDatabaseResilient(dbPath, (msg: string) => logger.warn('db', msg));
-      db = res.db;
-      dbRecoveredFromCorruption = res.recovered;
-      if (res.recovered) {
-        logger.error('db', 'previous database was unreadable and has been quarantined; a fresh one was created', {
-          quarantinedTo: res.quarantinedTo ?? null,
-        });
-      }
-      repo = new Repository(db);
-      repo.ensureCategories();
-      logger.info('db', 'database ready', { path: dbPath, recovered: res.recovered });
-    }
-    return repo!;
-  };
+  const ensure = ensureDb;
 
   const withRepo = <T>(fn: (r: Repository) => Promise<T> | T): Promise<T> => {
     const r = ensure();
@@ -297,6 +303,51 @@ export function startServicesAfterUiReady(): void {
     if (watcher && repo) watcher.update(repo.getSettings().watchedFolders);
   } catch (err) {
     logger.warn('watcher', 'deferred start failed', { message: (err as Error).message });
+  }
+}
+
+export interface StartupSelfCheck {
+  settingsSummary: string;
+  folderIssues: FolderIssue[];
+  dbRecovered: boolean;
+}
+
+/**
+ * Startup self-check for the bootstrap log (BOOTSTRAP 04-07, 13-15).
+ * Pre-opens the database (settings/config live in SQLite), reads the saved
+ * folders and audits them — every failure DEGRADES instead of throwing, so a
+ * broken db/config/folder can no longer prevent the UI from opening.
+ */
+export function startupSelfCheck(): StartupSelfCheck {
+  let recovered = false;
+  let r: Repository;
+  try {
+    r = ensureDb();
+    recovered = dbRecoveredFromCorruption;
+  } catch (err) {
+    logger.error('db', 'startup self-check could not open the database — continuing without it', {
+      message: (err as Error).message,
+    });
+    return { settingsSummary: 'db-unavailable', folderIssues: [], dbRecovered: false };
+  }
+  try {
+    const s = r.getSettings();
+    const issues = auditFolders(s);
+    logger.info('main', 'startup self-check: saved folders restored', {
+      organizeFolders: s.organizeFolders.length,
+      watchedFolders: s.watchedFolders.length,
+      issues: issues.length,
+    });
+    return {
+      settingsSummary: `organizeFolders=${s.organizeFolders.length} watchedFolders=${s.watchedFolders.length}`,
+      folderIssues: issues,
+      dbRecovered: recovered,
+    };
+  } catch (err) {
+    logger.error('settings', 'startup self-check could not read settings — safe defaults will be used', {
+      message: (err as Error).message,
+    });
+    return { settingsSummary: 'settings-unavailable', folderIssues: [], dbRecovered: recovered };
   }
 }
 

@@ -91,6 +91,33 @@ jobs:
           Write-Host $out
           if ($out -notmatch 'NATIVE_OK') { throw 'better-sqlite3 in the package is not built for the Electron ABI' }
 
+      - name: Smoke-test the packaged app boots and stays alive (2 launch cycles)
+        # STEP 9 — "do not call it fixed early": the packaged exe itself must
+        # boot, stay alive, and reach "BOOTSTRAP COMPLETE" in
+        # %TEMP%\FileMind-bootstrap.log. Run twice to prove a clean relaunch
+        # (single-instance lock released, no leftover state blocking startup).
+        shell: pwsh
+        run: |
+          $log = Join-Path $env:TEMP 'FileMind-bootstrap.log'
+          $exe = Join-Path (Get-Location) 'release\win-unpacked\FileMind.exe'
+          if (-not (Test-Path $exe)) { throw "packaged exe not found: $exe" }
+          foreach ($run in 1..2) {
+            Remove-Item $log -Force -ErrorAction SilentlyContinue
+            Get-Process FileMind -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 2
+            $p = Start-Process -FilePath $exe -PassThru
+            Start-Sleep -Seconds 15
+            if ($p.HasExited) { throw "RUN ${run}: FileMind exited early (code $($p.ExitCode))" }
+            if (-not (Test-Path $log)) { throw "RUN ${run}: bootstrap log was not created" }
+            $content = Get-Content $log -Raw
+            Write-Host $content
+            if ($content -notmatch 'BOOTSTRAP COMPLETE') { throw "RUN ${run}: startup did not reach BOOTSTRAP COMPLETE" }
+            Write-Host "RUN ${run}: OK — process alive and BOOTSTRAP COMPLETE reached"
+            Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 3
+          }
+          Get-Process FileMind -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+
       - name: Upload installers + zip to the GitHub release
         uses: softprops/action-gh-release@v2
         with:
