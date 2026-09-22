@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import path from 'node:path';
 import { planForFile } from '../src/main/services/planner';
 import type { Rule, Classification } from '../src/shared/types';
 
@@ -33,7 +34,7 @@ describe('planner: rule authority', () => {
       exists: existsFree,
     });
     expect(out.suggestion?.reason).toBe('rule');
-    expect(out.suggestion?.toPath).toBe('/data/Downloads/Finance/invoice_scan.pdf');
+    expect(out.suggestion?.toPath).toBe(path.join('/data/Downloads/Finance', 'invoice_scan.pdf'));
     expect(out.suggestion?.confidence).toBe(0.99);
   });
 
@@ -58,7 +59,7 @@ describe('planner: deterministic suggestions', () => {
       settings,
       exists: existsFree,
     });
-    expect(out.suggestion?.toPath).toBe('/data/Downloads/Images/photo.jpg');
+    expect(out.suggestion?.toPath).toBe(path.join('/data/Downloads/Images', 'photo.jpg'));
     expect(out.suggestion?.tier).toBe('high');
     expect(out.classification.source).toBe('deterministic');
   });
@@ -124,6 +125,6 @@ describe('planner: collision safety inside a plan batch', () => {
     const first = mk('/data/Downloads/photo.jpg');
     taken.add(first.suggestion!.toPath);
     const second = mk('/data/Downloads/sub/photo.jpg');
-    expect(second.suggestion!.toPath).toBe('/data/Downloads/Images/photo (2).jpg');
+    expect(second.suggestion!.toPath).toBe(path.join('/data/Downloads/Images', 'photo (2).jpg'));
   });
 });
