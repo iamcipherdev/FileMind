@@ -33,6 +33,7 @@ const api = {
   setSettings: (s: unknown) => ipcRenderer.invoke('settings:set', s),
   pickFolder: (title: string) => ipcRenderer.invoke('dialog:pickFolder', title),
   getMlStatus: () => ipcRenderer.invoke('ml:status'),
+  warmupMl: () => ipcRenderer.invoke('ml:warmup'),
   generateDemoFiles: (dir: string) => ipcRenderer.invoke('demo:generate', dir),
   getAppInfo: () => ipcRenderer.invoke('app:info'),
   openPath: (p: string) => ipcRenderer.invoke('fs:openPath', p),

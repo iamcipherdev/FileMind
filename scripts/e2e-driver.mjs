@@ -130,11 +130,12 @@ try {
       await evaluate(`[...document.querySelectorAll('button')].find(b => b.textContent.includes('Start organizing'))?.click()`);
       log('clicked through real onboarding');
     } else {
-      // Fallback: identical payload to Onboarding.finish(), via the real bridge.
+      // Fallback: identical payload to Onboarding.finish() (v0.1.4: watching
+      // is NOT auto-enabled), via the real bridge.
       log('fallback: applying finish() payload via real settings bridge');
       await evaluate(`(async () => {
         const s = await window.filemind.getSettings();
-        await window.filemind.setSettings({ ...s, organizeFolders: [${JSON.stringify(FOLDER)}], watchedFolders: [${JSON.stringify(FOLDER)}] });
+        await window.filemind.setSettings({ ...s, organizeFolders: [${JSON.stringify(FOLDER)}], watchedFolders: [] });
       })()`);
       // Reload mounts the post-onboarding app (same as the real onDone path).
       await evaluate(`window.location.reload()`);
@@ -156,6 +157,23 @@ try {
       : 'no bridge';
   })()`);
   log('ml:status message:', ml);
+
+  // Optional: explicit ML worker warmup (production ONNX test — proves the
+  // packaged ONNX runtime + model session work, isolated from the main process).
+  if (args.warmup) {
+    const warm = await evaluate(`(async () => window.filemind.warmupMl())()`);
+    log('ml:warmup ->', JSON.stringify(warm));
+  }
+
+  // Optional: explicitly enable watching (Settings-equivalent opt-in path).
+  if (args.watch) {
+    await evaluate(`(async () => {
+      const s = await window.filemind.getSettings();
+      await window.filemind.setSettings({ ...s, watchedFolders: [...new Set([...(s.watchedFolders ?? []), ${JSON.stringify(FOLDER)}])] });
+    })()`);
+    await sleep(2000);
+    log('watcher explicitly enabled for', FOLDER);
+  }
 
   await evaluate(`window.filemind && window.filemind.marker && window.filemind.marker('E2E_HOME_VERIFIED')`);
   console.log('[e2e-driver] RESULT OK');

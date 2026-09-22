@@ -228,6 +228,8 @@ export interface FilemindApi {
   setSettings: (s: FileMindSettings) => Promise<{ rejected?: string[] }>;
   pickFolder: (title: string) => Promise<string | null>;
   getMlStatus: () => Promise<MlStatus>;
+  /** Explicit ML worker initialization (tests / opt-in). Never called on startup. */
+  warmupMl: () => Promise<{ ok: boolean; numLabels: number; message: string }>;
   generateDemoFiles: (dir: string) => Promise<{ created: number; dir: string }>;
   getAppInfo: () => Promise<AppInfo>;
   notifyUiReady: () => Promise<void>;

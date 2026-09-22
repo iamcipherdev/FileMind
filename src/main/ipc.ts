@@ -106,6 +106,9 @@ export function wireIpc(getWin: () => BrowserWindow | null): void {
     try {
       const settings = r.getSettings();
       if (!ml) ml = await createMlClassifier();
+      // Classification is actually needed now: lazily initialize the isolated
+      // ML worker. Failure here only degrades to the rule engine.
+      await ml.ensureReady();
       const result = await runSuggestPipeline(roots, {
         getRules: async () => r.listRules(),
         ml,
@@ -271,12 +274,20 @@ export function wireIpc(getWin: () => BrowserWindow | null): void {
   });
 
   safeHandle('ml:status', async () => {
-    // FAITHFUL reproduction path (v0.1.2/v0.1.3 architecture): this currently
-    // initializes the ONNX runtime in the main process. Marked so experiments
-    // can prove exactly how far this path gets before any termination.
+    // Lightweight only: file/package checks. NEVER loads onnxruntime, NEVER
+    // spawns the ML worker — opening the app must not touch the native ML
+    // stack (the worker initializes on first real classification instead).
     marker('ML_STATUS_REQUESTED');
     if (!ml) ml = await createMlClassifier();
     return ml.status();
+  });
+
+  // Explicit ML initialization — used by tests and by users who want the
+  // model loaded before a scan. Not called anywhere on startup.
+  safeHandle('ml:warmup', async () => {
+    if (!ml) ml = await createMlClassifier();
+    const ok = await ml.ensureReady();
+    return { ok, numLabels: ml.numLabels(), message: ml.status().message };
   });
 
   safeHandle('app:info', () => withRepo(() => ({
@@ -303,12 +314,20 @@ export function wireIpc(getWin: () => BrowserWindow | null): void {
     (msg, extra) => logger.warn('watcher', msg, extra),
     (msg, extra) => logger.info('watcher', msg, extra)
   );
-  safeHandle('watcher:start', () => withRepo((r) => {
-    watcher!.update(r.getSettings().watchedFolders);
+  safeHandle('watcher:start', async () => withRepo(async (r) => {
+    if (watcher) {
+      try { await watcher.update(r.getSettings().watchedFolders); }
+      catch (err) { logger.error('watcher', 'start failed (app continues without watcher)', { message: (err as Error).message }); }
+    }
   }));
-  safeHandle('ui:ready', () => {
+  safeHandle('ui:ready', async () => {
     logger.info('main', 'UI ready — starting background services');
-    withRepo((r) => { watcher!.update(r.getSettings().watchedFolders); });
+    await withRepo(async (r) => {
+      if (watcher) {
+        try { await watcher.update(r.getSettings().watchedFolders); }
+        catch (err) { logger.error('watcher', 'deferred start failed (app continues)', { message: (err as Error).message }); }
+      }
+    });
   });
 
   // Diagnostic/lifecycle marker from the renderer, forwarded to the

@@ -36,7 +36,9 @@ export default function OnboardingPage({ onDone }: { onDone: () => void }) {
   const finish = async () => {
     try {
       const s = await api.getSettings();
-      const res = await api.setSettings({ ...s, organizeFolders: folders, watchedFolders: folders });
+      // Selecting organize folders must NOT silently enable filesystem
+      // watching. Watching is an explicit opt-in in Settings.
+      const res = await api.setSettings({ ...s, organizeFolders: folders, watchedFolders: [] });
       if (res?.rejected?.length) {
         setError(`These folders were not accepted: ${res.rejected.join(', ')}`);
         return;
