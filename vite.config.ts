@@ -19,5 +19,10 @@ export default defineConfig({
   test: {
     include: ['tests/**/*.test.ts'],
     environment: 'node',
+    // Forked pool: every test file runs in its own PROCESS. Required because
+    // diagnostic-variant tests toggle FILEMIND_DISABLE_* env vars; with the
+    // default threads pool worker threads share process.env, which flakily
+    // contaminates unrelated test files (observed on Windows CI).
+    pool: 'forks',
   },
 } as never);
